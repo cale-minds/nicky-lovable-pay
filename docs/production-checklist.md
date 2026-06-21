@@ -57,7 +57,11 @@ Work through this before taking the Nicky payment kit live. It complements
 - [ ] `npm run typecheck:edge` (Deno) passes. This CI job is **blocking** (not
       advisory). It needs the Deno CLI and network access to fetch the Edge
       Functions' remote (`esm.sh`) imports; on a transient registry outage, re-run
-      the job rather than disabling it.
+      the job rather than disabling it. To run it locally, install Deno v2.x
+      (`curl -fsSL https://deno.land/install.sh | sh`, `brew install deno`, or on
+      Windows `irm https://deno.land/install.ps1 | iex`) — see
+      [`setup.md`](setup.md#installing-deno-for-typecheckedge). CI installs Deno
+      automatically via `denoland/setup-deno`.
 
 ## End-to-end verification
 
