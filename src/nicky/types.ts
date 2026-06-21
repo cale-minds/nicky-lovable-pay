@@ -55,8 +55,10 @@ export interface NickyAsset {
   network?: string;
   /** Optional icon URL provided by Nicky. */
   iconUrl?: string;
-  /** Number of decimals the asset supports, when known. */
+  /** Number of decimals the asset supports, when known (from decimalPrecisionUI). */
   decimals?: number;
+  /** Whether the asset is a fiat currency (from the Nicky `isFiat` flag). */
+  isFiat?: boolean;
 }
 
 /**

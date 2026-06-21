@@ -45,8 +45,8 @@ checkout, and confirming settlement **server-side** before unlocking anything.
  ┌──────────────┐    create     ┌──────────────────────┐   POST create    ┌────────────┐
  │ React kit    │ ────────────▶ │ nicky-create-payment │ ───────────────▶ │   Nicky    │
  │ (browser)    │               │   (Edge Function)    │ ◀─────────────── │   API      │
- └──────┬───────┘               └──────────┬───────────┘   {id, shortId}   └─────┬──────┘
-        │ redirect to pay.nicky.me/home?paymentId=<shortId>                       │
+ └──────┬───────┘               └──────────┬───────────┘ {id, bill.shortId} └─────┬──────┘
+        │ redirect to pay.nicky.me/home?paymentId=<bill.shortId>                  │
         ▼                                                                         │
  ┌──────────────┐                                                                 │ webhook (IP 20.76.240.81)
  │ Nicky hosted │                                                                 ▼
@@ -83,12 +83,12 @@ never proof.
 │   ├── migrations/
 │   │   └── 001_nicky_payment_kit.sql
 │   └── functions/
-│       ├── _shared/             # env, db, validation, Nicky client, reconcile
+│       ├── _shared/             # env, db, validation, Nicky client, reconcile,
+│       │                        # status, assets, payment-identifiers, webhook-ip
 │       ├── nicky-create-payment/
 │       ├── nicky-list-assets/
 │       ├── nicky-webhook/
-│       ├── nicky-sync-payment-status/
-│       └── nicky-register-webhooks/
+│       └── nicky-sync-payment-status/
 └── src/
     └── nicky/                   # React kit (components, hooks, types)
         ├── index.ts
@@ -139,36 +139,33 @@ supabase db push
 
 ### 5. Deploy the Edge Functions
 
+The plugin ships exactly four functions:
+
 ```bash
 supabase functions deploy nicky-create-payment
 supabase functions deploy nicky-list-assets
 supabase functions deploy nicky-sync-payment-status
 supabase functions deploy nicky-webhook            # verify_jwt = false
-supabase functions deploy nicky-register-webhooks  # verify_jwt = false
 ```
 
-### 6. Register the webhooks
+### 6. Configure the webhook in Nicky (once, outside the plugin runtime)
 
-The webhook callback URL is **only known after deployment**. It is:
+This plugin **only processes** webhooks — it does **not** create, update, or
+delete them at runtime. Configure the webhook **once** in Nicky (manually in the
+dashboard, or via the Lovable setup prompt), pointing at the fixed callback URL,
+which is only known after deployment:
 
 ```
 https://<project-ref>.functions.supabase.co/nicky-webhook
 ```
 
-Register it (idempotently) for both event types:
+Register it for both required events:
 
-```bash
-supabase secrets set WEBHOOK_CALLBACK_URL=https://<project-ref>.functions.supabase.co/nicky-webhook
-supabase functions deploy nicky-register-webhooks
+- `PaymentRequest_ReportAdded`
+- `PaymentRequest_StatusChanged`
 
-curl -X POST https://<project-ref>.functions.supabase.co/nicky-register-webhooks
-# or pass it explicitly:
-curl -X POST https://<project-ref>.functions.supabase.co/nicky-register-webhooks \
-  -H "Content-Type: application/json" \
-  -d '{"callbackUrl":"https://<project-ref>.functions.supabase.co/nicky-webhook"}'
-```
-
-This registers `PaymentRequest_ReportAdded` and `PaymentRequest_StatusChanged`.
+Do not use arbitrary callback URLs — the route is fixed and owned by the kit.
+See [`docs/webhooks.md`](docs/webhooks.md).
 
 ---
 
@@ -277,12 +274,30 @@ periodic `nicky-sync-payment-status` move it to `paid` once Nicky returns
 | `NICKY_API_BASE_URL`        | Secret/env   | `https://api-public.pay.nicky.me`  | Nicky public API base.                 |
 | `NICKY_PAY_BASE_URL`        | Secret/env   | `https://pay.nicky.me`             | Used to build payer redirect URL.      |
 | `NICKY_WEBHOOK_ALLOWED_IP`  | Secret/env   | `20.76.240.81`                     | Webhook source-IP allow list.          |
-| `NICKY_ASSETS_ENDPOINT`     | Secret/env   | `/api/public/.../get-supported-assets` | Override if your account differs.  |
-| `WEBHOOK_CALLBACK_URL`      | Secret/env   | —                                  | For `nicky-register-webhooks`.         |
 | `SUPABASE_URL`              | Auto         | —                                  | Injected by Supabase.                  |
 | `SUPABASE_SERVICE_ROLE_KEY` | Auto         | —                                  | Injected by Supabase. Server-only.     |
 | `VITE_SUPABASE_FUNCTIONS_URL` | Frontend   | —                                  | Public. Functions base URL.            |
 | `VITE_SUPABASE_ANON_KEY`    | Frontend     | —                                  | Public anon key.                       |
+
+> **Removed in this version:** there is no `NICKY_ASSETS_ENDPOINT` (assets come
+> from the fixed endpoint `GET /AcceptedAsset/get-for-user`) and no
+> `WEBHOOK_CALLBACK_URL` (the plugin no longer registers webhooks at runtime).
+
+### Payment request identifiers
+
+`nicky-create-payment` calls
+`POST /api/public/PaymentRequestPublicApi/create` and reads exactly two fields
+from the response:
+
+- `response.id` — the Payment Request UUID.
+- `response.bill.shortId` — the short id used to build the payment link
+  (`https://pay.nicky.me/home?paymentId=<bill.shortId>`).
+
+No alternate/legacy field names are probed. If **either** identifier is missing
+or empty, that is treated as an **exceptional API-contract error**: the local
+order is marked `failed`, the raw response is stored in `nicky_create_response`,
+no `nicky_payment_requests` row is created, no `paymentUrl` is returned, and the
+caller receives a clear `502`.
 
 ---
 

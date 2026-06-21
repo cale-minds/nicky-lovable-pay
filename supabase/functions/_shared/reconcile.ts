@@ -10,11 +10,11 @@ import type { NickyEnv } from "./env.ts";
 import {
   getPaymentRequestById,
   getPaymentRequestByShortId,
-  extractShortId,
   mapRemoteStatus,
   type NickyLocalStatus,
   type NickyPaymentRequest,
 } from "./nicky.ts";
+import { getShortIdFromResponse } from "./payment-identifiers.ts";
 
 export interface OrderLocator {
   orderId?: string;
@@ -99,7 +99,7 @@ export async function reconcileOrder(
 
   const remoteStatus = pr.status as string | undefined;
   const localStatus = mapRemoteStatus(remoteStatus);
-  const resolvedShortId = shortId ?? extractShortId(pr);
+  const resolvedShortId = shortId ?? getShortIdFromResponse(pr);
   const resolvedRequestId = requestId ?? (pr.id as string | undefined);
 
   // --- Persist audit trail of this check --------------------------------

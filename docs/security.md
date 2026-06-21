@@ -41,10 +41,12 @@ Even a webhook is not trusted as the source of truth:
   `NICKY_WEBHOOK_ALLOWED_IP` (default `20.76.240.81`). Non-matching requests are
   rejected with `403` (but still recorded for audit).
 - **Proxy headers, handled carefully.** Supabase fronts functions with a proxy,
-  so we read `x-forwarded-for` and take the **left-most** entry (the original
-  client recorded by the trusted edge). We do **not** blindly trust arbitrary
-  forwarding headers — and crucially, even a spoofed IP cannot cause a false
-  `paid`, because of the next point.
+  so we read `x-forwarded-for` and use **only the first (left-most) entry** (the
+  original client recorded by the trusted edge). We do **not** scan arbitrary
+  positions, and we do **not** consult freely-settable headers such as
+  `x-real-ip` or `cf-connecting-ip` — that prevents the trivial spoof of slipping
+  the allowed IP into a loosely-scanned header. Crucially, even a spoofed IP
+  cannot cause a false `paid`, because of the next point.
 - **Mandatory re-query.** The webhook body's `newStatus` is **never** trusted.
   We use `itemId` to ask Nicky directly, and only then update the order.
 
@@ -94,11 +96,12 @@ as "pending"; only `paid` (i.e. Nicky `Finished`) unlocks anything.
 
 - `nicky-webhook`: `verify_jwt = false` (Nicky cannot send a Supabase JWT).
   Protected instead by IP validation + re-query.
-- `nicky-register-webhooks`: `verify_jwt = false` for setup convenience. It only
-  registers your own callback URL using your own key, but consider locking it
-  down or removing it after initial setup.
 - `nicky-create-payment`, `nicky-list-assets`, `nicky-sync-payment-status`:
   `verify_jwt = true` — they require the Supabase anon key.
+
+The plugin does **not** register, list, or delete webhooks at runtime, so there
+is no setup function to lock down. Webhooks are configured once, outside the
+plugin runtime (see `docs/webhooks.md`).
 
 ## 9. Things to do yourself
 

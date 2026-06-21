@@ -8,11 +8,18 @@ function.
 https://<project-ref>.functions.supabase.co/nicky-webhook
 ```
 
+> **The plugin only PROCESSES webhooks. It does not create, update, or delete
+> them at runtime.** The webhook must be configured **once**, outside the plugin
+> runtime — manually in the Nicky dashboard or via the Lovable setup prompt. See
+> [Configuring the webhook](#configuring-the-webhook-once-outside-the-plugin)
+> below.
+
 ---
 
 ## Supported events
 
-The kit registers and handles two Nicky event types:
+The plugin handles two Nicky event types (these are the events you register
+once in Nicky):
 
 | Event                            | Meaning                                            |
 | -------------------------------- | -------------------------------------------------- |
@@ -62,38 +69,40 @@ The kit reads `itemId` to identify the payment request. It records
 ## A note on proxy headers and IP spoofing
 
 Supabase Edge Functions sit behind a proxy, so the raw socket IP is the proxy's,
-not Nicky's. The kit therefore inspects `x-forwarded-for` and takes the
-**left-most** entry — the original client as recorded by the trusted edge.
+not Nicky's. The kit therefore inspects `x-forwarded-for` and uses **only the
+first (left-most) entry** — the original client as recorded by the trusted edge.
 
-`x-forwarded-for` is, in general, a client-settable header. The kit does **not**
-rely on it as a security boundary on its own. The actual guarantee comes from
-step 5: the webhook only ever causes the order to reflect what Nicky's API says
-when queried directly. A forged IP can, at worst, get an event recorded — it
-cannot fabricate a `Finished` status.
+This is deliberate: the kit does **not** scan arbitrary positions in
+`x-forwarded-for`, and it does **not** consult freely-settable headers like
+`x-real-ip` or `cf-connecting-ip`. That closes the trivial spoof of inserting
+the allowed IP somewhere in a loosely-scanned header. If the first entry is not
+the allowed IP, the request is rejected with `403`.
+
+Even so, IP validation is only defense-in-depth. The real guarantee comes from
+the mandatory **server-side re-query** (step 5): the webhook only ever causes the
+order to reflect what Nicky's API says when queried directly. A forged IP can, at
+worst, get an event recorded — it cannot fabricate a `Finished` status.
 
 If your deployment sits behind a different/known proxy, set
-`NICKY_WEBHOOK_ALLOWED_IP` accordingly and review `extractClientIps()` in
-`supabase/functions/nicky-webhook/index.ts`.
+`NICKY_WEBHOOK_ALLOWED_IP` accordingly and review `checkWebhookIp()` in
+`supabase/functions/_shared/webhook-ip.ts`.
 
-## Registering webhooks (`nicky-register-webhooks`)
+## Configuring the webhook (once, outside the plugin)
 
-The callback URL is only known after deployment, so registration is a separate,
-idempotent step:
+The plugin does **not** register webhooks. Configure it once, after deploying
+the functions (the callback URL is only known then):
 
-```bash
-supabase secrets set WEBHOOK_CALLBACK_URL=https://<project-ref>.functions.supabase.co/nicky-webhook
-supabase functions deploy nicky-register-webhooks
-curl -X POST https://<project-ref>.functions.supabase.co/nicky-register-webhooks
-```
+1. Copy the fixed callback URL:
+   `https://<project-ref>.functions.supabase.co/nicky-webhook`
+2. In the Nicky dashboard (or via the Lovable setup prompt), register that URL
+   for both events:
+   - `PaymentRequest_ReportAdded`
+   - `PaymentRequest_StatusChanged`
+3. Do not use any other URL — the route is fixed and owned by the kit.
 
-The function:
-
-- Calls `GET /api/public/WebHookApi/list` first.
-- Skips any event type already pointing at your callback URL (**idempotent**).
-- Creates the missing ones via `POST /api/public/WebHookApi/create`.
-
-To remove a webhook, use `POST /api/public/WebHookApi/delete` (the
-`deleteWebhook` helper is available in `_shared/nicky.ts`).
+There is no `nicky-register-webhooks` function and no `WEBHOOK_CALLBACK_URL`
+secret in this plugin. Webhook lifecycle management (create/list/delete) is
+intentionally out of the plugin's production runtime.
 
 ## Don't rely on webhooks alone
 

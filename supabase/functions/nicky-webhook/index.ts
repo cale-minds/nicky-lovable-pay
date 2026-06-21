@@ -28,38 +28,7 @@ import { getNickyEnv } from "../_shared/env.ts";
 import { getServiceClient } from "../_shared/db.ts";
 import { reconcileOrder } from "../_shared/reconcile.ts";
 import { NickyApiError } from "../_shared/nicky.ts";
-
-/** Extracts candidate client IPs from forwarding headers + connection info. */
-function extractClientIps(req: Request, connInfo?: { remoteAddr?: { hostname?: string } }): string[] {
-  const ips: string[] = [];
-
-  const xff = req.headers.get("x-forwarded-for");
-  if (xff) {
-    // Left-most is the original client as recorded by the trusted edge proxy.
-    for (const part of xff.split(",")) {
-      const ip = part.trim();
-      if (ip) ips.push(ip);
-    }
-  }
-
-  const realIp = req.headers.get("x-real-ip");
-  if (realIp) ips.push(realIp.trim());
-
-  const cfIp = req.headers.get("cf-connecting-ip");
-  if (cfIp) ips.push(cfIp.trim());
-
-  const direct = connInfo?.remoteAddr?.hostname;
-  if (direct) ips.push(direct);
-
-  return ips;
-}
-
-function ipMatches(allowedIp: string, candidates: string[]): { allowed: boolean; matched?: string } {
-  for (const c of candidates) {
-    if (c === allowedIp) return { allowed: true, matched: c };
-  }
-  return { allowed: false };
-}
+import { checkWebhookIp } from "../_shared/webhook-ip.ts";
 
 /** Stable dedupe key for an event, used to enforce idempotency. */
 function buildDedupeKey(payload: Record<string, unknown>): string {
@@ -92,16 +61,22 @@ Deno.serve(async (req, connInfo) => {
     return errorResponse("Webhook body must be valid JSON.", 400);
   }
 
-  // 2. Validate source IP.
-  const candidates = extractClientIps(req, connInfo as { remoteAddr?: { hostname?: string } });
-  const { allowed: ipAllowed, matched } = ipMatches(env.webhookAllowedIp, candidates);
+  // 2. Validate source IP. Only the FIRST x-forwarded-for entry is trusted
+  //    (set by the Supabase edge proxy); we fall back to the direct connection
+  //    IP when the header is absent. We do not scan arbitrary headers/positions.
+  const directIp = (connInfo as { remoteAddr?: { hostname?: string } } | undefined)?.remoteAddr
+    ?.hostname;
+  const { allowed: ipAllowed, clientIp } = checkWebhookIp({
+    allowedIp: env.webhookAllowedIp,
+    forwardedFor: req.headers.get("x-forwarded-for"),
+    directIp,
+  });
 
   const data = (payload.data as Record<string, unknown> | undefined) ?? {};
   const dedupeKey = buildDedupeKey(payload);
 
   const selectedHeaders = {
     "x-forwarded-for": req.headers.get("x-forwarded-for"),
-    "x-real-ip": req.headers.get("x-real-ip"),
     "user-agent": req.headers.get("user-agent"),
   };
 
@@ -117,7 +92,7 @@ Deno.serve(async (req, connInfo) => {
       item_id: payload.itemId ?? null,
       previous_status: data.previousStatus ?? null,
       new_status: data.newStatus ?? null,
-      source_ip: matched ?? candidates[0] ?? null,
+      source_ip: clientIp ?? null,
       ip_allowed: ipAllowed,
       raw_payload: payload,
       raw_headers: selectedHeaders,
@@ -139,7 +114,7 @@ Deno.serve(async (req, connInfo) => {
 
   // Reject (but keep the audit record) if the IP is not Nicky's.
   if (!ipAllowed) {
-    console.warn("Rejected webhook from unauthorized IP", candidates.join(","));
+    console.warn("Rejected webhook from unauthorized IP", clientIp ?? "(unknown)");
     if (eventId) {
       await supabase
         .from("nicky_webhook_events")

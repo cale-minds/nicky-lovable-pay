@@ -26,10 +26,13 @@ import {
 import {
   buildPaymentUrl,
   createPaymentRequest,
-  extractShortId,
   NickyApiError,
   type CreatePaymentRequestBody,
 } from "../_shared/nicky.ts";
+import {
+  getRequiredPaymentRequestIdentifiers,
+  PaymentRequestContractError,
+} from "../_shared/payment-identifiers.ts";
 
 Deno.serve(async (req) => {
   const preflight = handlePreflight(req);
@@ -125,16 +128,28 @@ Deno.serve(async (req) => {
     };
 
     const pr = await createPaymentRequest(env, nickyBody);
-    const nickyPaymentRequestId = (pr.id as string) ?? undefined;
-    const shortId = extractShortId(pr);
 
-    if (!shortId) {
-      await supabase.from("nicky_orders").update({ status: "failed", nicky_create_response: pr }).eq("id", orderId);
-      return errorResponse(
-        "Nicky did not return a usable short id for the payment request.",
-        502,
-        { nickyResponse: pr },
-      );
+    // --- 3a. Strictly extract the required identifiers ---------------------
+    // Per the API contract the response must contain `id` (Payment Request UUID)
+    // and `bill.shortId`. A missing identifier is an exceptional invalid-protocol
+    // case — NOT a normal fallback. We fail the order and do not continue with a
+    // partial state.
+    let paymentRequestId: string;
+    let shortId: string;
+    try {
+      ({ paymentRequestId, shortId } = getRequiredPaymentRequestIdentifiers(pr));
+    } catch (contractErr) {
+      const message =
+        contractErr instanceof PaymentRequestContractError
+          ? contractErr.message
+          : "Nicky returned an unusable create response.";
+      // Mark the already-created local order failed and persist the raw response.
+      await supabase
+        .from("nicky_orders")
+        .update({ status: "failed", nicky_create_response: pr })
+        .eq("id", orderId);
+      // Do NOT create a nicky_payment_requests row and do NOT return a paymentUrl.
+      return errorResponse(message, 502, { nickyResponse: pr });
     }
 
     const paymentUrl = buildPaymentUrl(env, shortId);
@@ -144,7 +159,7 @@ Deno.serve(async (req) => {
       .from("nicky_orders")
       .update({
         status: "waiting_payment",
-        nicky_payment_request_id: nickyPaymentRequestId,
+        nicky_payment_request_id: paymentRequestId,
         nicky_short_id: shortId,
         payment_url: paymentUrl,
         last_remote_status: (pr.status as string) ?? "PaymentPending",
@@ -160,10 +175,12 @@ Deno.serve(async (req) => {
       });
     }
 
-    await supabase.from("nicky_payment_requests").upsert(
+    // The normalized payment-request row REQUIRES nicky_payment_request_id. We
+    // do not ignore DB errors here.
+    const { error: prErr } = await supabase.from("nicky_payment_requests").upsert(
       {
         order_id: orderId,
-        nicky_payment_request_id: nickyPaymentRequestId,
+        nicky_payment_request_id: paymentRequestId,
         nicky_short_id: shortId,
         payment_url: paymentUrl,
         blockchain_asset_id: blockchainAssetId,
@@ -174,10 +191,18 @@ Deno.serve(async (req) => {
       { onConflict: "nicky_payment_request_id" },
     );
 
+    if (prErr) {
+      console.error("failed to persist nicky_payment_requests row", prErr.message);
+      return errorResponse("Failed to persist the payment request record.", 500, {
+        paymentUrl,
+        nickyShortId: shortId,
+      });
+    }
+
     // --- 5. Respond --------------------------------------------------------
     return json({
       orderId,
-      nickyPaymentRequestId,
+      nickyPaymentRequestId: paymentRequestId,
       nickyShortId: shortId,
       paymentUrl,
       status: "waiting_payment",

@@ -11,8 +11,17 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
+    "allowImportingTsExtensions": true,
     "noEmit": true,
-    "types": ["react"]
+    "types": ["react", "vitest/globals"]
   },
-  "include": ["src/nicky"]
+  "comment": "Only the pure, runtime-agnostic modules are type-checked here. The Deno Edge Function entrypoints (Deno.serve, esm.sh URL imports) are not type-checked by tsc; they run under Deno on Supabase.",
+  "include": [
+    "src/nicky",
+    "tests",
+    "supabase/functions/_shared/status.ts",
+    "supabase/functions/_shared/assets.ts",
+    "supabase/functions/_shared/payment-identifiers.ts",
+    "supabase/functions/_shared/webhook-ip.ts"
+  ]
 }
