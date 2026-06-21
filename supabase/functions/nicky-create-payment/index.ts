@@ -212,10 +212,16 @@ Deno.serve(async (req) => {
     // real protection should be app auth + WAF/Cloudflare (see docs/security.md).
     if (env.createRateLimitPerHour > 0) {
       const sinceIso = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+      // Exclude the current order (it was just created/claimed by the RPC above)
+      // so it doesn't count against itself — otherwise a cap of N would block the
+      // Nth creation instead of the (N+1)th. With `.neq("id", orderId)` the count
+      // is the number of PREVIOUS orders in the window, and isOverRateLimit blocks
+      // once that already equals the cap (i.e. allow up to N, block the next).
       const { count, error: countErr } = await supabase
         .from("nicky_orders")
         .select("id", { count: "exact", head: true })
         .eq("payer_email", payerEmail)
+        .neq("id", orderId)
         .gte("created_at", sinceIso);
       if (!countErr && isOverRateLimit(count ?? 0, env.createRateLimitPerHour)) {
         // Release our claim so a legitimate later attempt isn't blocked by it.
@@ -239,16 +245,33 @@ Deno.serve(async (req) => {
     };
 
     // EXTERNAL-CALL CONSISTENCY: mark that we are about to call Nicky BEFORE the
-    // request. If the call succeeds but the local persistence below fails, this
-    // flag lets the create-or-claim RPC refuse an automatic stale re-claim
-    // (returning needs_review) instead of risking a DUPLICATE Nicky Payment
-    // Request. Nicky's public API has no documented idempotent-create or
-    // lookup-by-invoice-reference, so this marker is the safe mitigation.
-    // See docs/operations.md and docs/security.md.
-    await supabase
+    // request. This marker is the protection against DUPLICATE external creates:
+    // if the Nicky call succeeds but the local persistence below fails, it lets
+    // the create-or-claim RPC refuse an automatic stale re-claim (returning
+    // needs_review) instead of creating a second Nicky Payment Request. Nicky's
+    // public API has no documented idempotent-create or lookup-by-invoice-
+    // reference, so this marker is the safe mitigation.
+    //
+    // Therefore the marker write is MANDATORY: if it fails we must NOT call Nicky
+    // (a later retry could not tell the call had happened). We abort, release the
+    // claim, and persist nothing. See docs/operations.md and docs/security.md.
+    const { error: attemptErr } = await supabase
       .from("nicky_orders")
       .update({ nicky_create_attempted_at: new Date().toISOString() })
       .eq("id", orderId);
+
+    if (attemptErr) {
+      console.error("failed to write nicky_create_attempted_at", attemptErr.message);
+      // Release the claim so a legitimate later attempt isn't blocked by it.
+      await supabase
+        .from("nicky_orders")
+        .update({ creation_claimed_at: null })
+        .eq("id", orderId);
+      return errorResponse("Failed to mark Nicky create attempt; payment was not created.", 500, {
+        orderId,
+        retryable: true,
+      });
+    }
 
     const pr = await createPaymentRequest(env, nickyBody);
 

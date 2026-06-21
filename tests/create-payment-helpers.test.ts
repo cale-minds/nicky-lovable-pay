@@ -17,6 +17,24 @@ describe("isOverRateLimit", () => {
   it("allows below the cap", () => {
     expect(isOverRateLimit(4, 5)).toBe(false);
   });
+
+  // The Edge Function passes the count of PREVIOUS orders in the window
+  // (current order excluded via `.neq("id", orderId)`), so `recentCount` here is
+  // "how many were created before this one". The cap should allow up to N and
+  // block the (N+1)th.
+  describe("with current order excluded from the count", () => {
+    it("cap 1: first new order allowed (0 previous), second blocked (1 previous)", () => {
+      expect(isOverRateLimit(0, 1)).toBe(false); // creating the 1st
+      expect(isOverRateLimit(1, 1)).toBe(true); // creating the 2nd
+    });
+
+    it("cap 5: first five allowed (0..4 previous), sixth blocked (5 previous)", () => {
+      for (let previous = 0; previous < 5; previous++) {
+        expect(isOverRateLimit(previous, 5)).toBe(false);
+      }
+      expect(isOverRateLimit(5, 5)).toBe(true); // creating the 6th
+    });
+  });
 });
 
 describe("decideClaimAction", () => {
