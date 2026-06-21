@@ -159,8 +159,34 @@ npm test                # vitest unit tests
 npm run typecheck:edge  # Deno check of Edge Function entrypoints (needs Deno)
 ```
 
-CI runs the same on every push/PR (`.github/workflows/ci.yml`). Then work through
+CI runs the same on every push/PR (`.github/workflows/ci.yml`), and the Deno
+edge-check job is **blocking**. Then work through
 [`production-checklist.md`](production-checklist.md).
+
+### Installing Deno (for `typecheck:edge`)
+
+The Edge Functions use `Deno.serve` and remote (`esm.sh`) imports, so they are
+type-checked with Deno, not `tsc`. Install the Deno CLI (v2.x):
+
+```bash
+# macOS / Linux (official installer) — then add ~/.deno/bin to your PATH
+curl -fsSL https://deno.land/install.sh | sh
+
+# macOS (Homebrew)
+brew install deno
+
+# Windows (PowerShell)
+irm https://deno.land/install.ps1 | iex
+# or: scoop install deno   /   choco install deno
+```
+
+Verify with `deno --version` (expect `deno 2.x`). The first
+`npm run typecheck:edge` needs network access to fetch and cache the remote
+imports. You do **not** need to install Deno for CI — the workflow installs it
+via `denoland/setup-deno@v2`.
+
+> On a Windows/VirtualBox shared folder, run the checks from a local path (not
+> the shared mount) to avoid unreliable file I/O while Deno populates its cache.
 
 ## 11. Test end-to-end
 
