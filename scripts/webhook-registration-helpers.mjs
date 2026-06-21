@@ -15,6 +15,18 @@ export const REQUIRED_EVENTS = Object.freeze([
 ]);
 
 /**
+ * Thrown when `GET /api/public/WebHookApi/list` returns a shape we don't
+ * recognize. Failing loudly here is deliberate: silently treating an unexpected
+ * envelope as "no webhooks" could make the setup script create duplicates.
+ */
+export class WebhookListResponseError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "WebhookListResponseError";
+  }
+}
+
+/**
  * Masks an API key so it can appear in logs without leaking the secret.
  * Shows only a short prefix and the length; never the full value.
  * @param {string} key
@@ -81,20 +93,38 @@ export function validateSetupEnv({ apiKey, webhookUrl } = {}) {
 }
 
 /**
- * Normalizes whatever shape `GET /api/public/WebHookApi/list` returns into a
- * plain array of webhook records. Tolerates a bare array or an envelope with
- * `items` / `data`.
+ * Strictly normalizes the `GET /api/public/WebHookApi/list` response into a
+ * plain array of webhook records.
+ *
+ * Valid shapes (an empty array is valid — it just means "no webhooks yet"):
+ *   - a bare array: `[...]`
+ *   - `{ items: [...] }`
+ *   - `{ data: [...] }`
+ *
+ * Any other shape (null, non-object/non-array, `{}` with no recognized array,
+ * or `items`/`data` that isn't an array) throws `WebhookListResponseError`
+ * rather than silently returning `[]`, which would risk creating duplicate
+ * webhooks.
+ *
  * @param {unknown} data
  * @returns {Array<Record<string, unknown>>}
  */
 export function extractWebhookList(data) {
   if (Array.isArray(data)) return data;
+
   if (data && typeof data === "object") {
     const obj = /** @type {Record<string, unknown>} */ (data);
-    if (Array.isArray(obj.items)) return obj.items;
-    if (Array.isArray(obj.data)) return obj.data;
+    if ("items" in obj) {
+      if (Array.isArray(obj.items)) return obj.items;
+    } else if ("data" in obj) {
+      if (Array.isArray(obj.data)) return obj.data;
+    }
   }
-  return [];
+
+  throw new WebhookListResponseError(
+    "Unexpected response shape from /api/public/WebHookApi/list. " +
+      "Expected a bare array, { items: [...] }, or { data: [...] }.",
+  );
 }
 
 /**

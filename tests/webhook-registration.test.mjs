@@ -5,6 +5,7 @@ import {
   validateSetupEnv,
   maskApiKey,
   extractWebhookList,
+  WebhookListResponseError,
   getWebhookUrl,
   webhookMatches,
   planWebhookActions,
@@ -82,9 +83,43 @@ describe("extractWebhookList", () => {
     expect(extractWebhookList({ items: [1] })).toEqual([1]);
     expect(extractWebhookList({ data: [2] })).toEqual([2]);
   });
-  it("returns [] for unrecognized shapes", () => {
-    expect(extractWebhookList(null)).toEqual([]);
-    expect(extractWebhookList({ nope: true })).toEqual([]);
+
+  it("treats valid empty lists as empty (not an error)", () => {
+    expect(extractWebhookList([])).toEqual([]);
+    expect(extractWebhookList({ items: [] })).toEqual([]);
+    expect(extractWebhookList({ data: [] })).toEqual([]);
+  });
+
+  it("throws WebhookListResponseError for null", () => {
+    expect(() => extractWebhookList(null)).toThrowError(WebhookListResponseError);
+  });
+
+  it("throws WebhookListResponseError for an object without items/data", () => {
+    expect(() => extractWebhookList({ nope: true })).toThrowError(WebhookListResponseError);
+    expect(() => extractWebhookList({})).toThrowError(WebhookListResponseError);
+  });
+
+  it("throws when items is not an array", () => {
+    expect(() => extractWebhookList({ items: "not-array" })).toThrowError(
+      WebhookListResponseError,
+    );
+  });
+
+  it("throws when data is not an array", () => {
+    expect(() => extractWebhookList({ data: "not-array" })).toThrowError(
+      WebhookListResponseError,
+    );
+  });
+
+  it("throws for primitive (string/number) input", () => {
+    expect(() => extractWebhookList("oops")).toThrowError(WebhookListResponseError);
+    expect(() => extractWebhookList(42)).toThrowError(WebhookListResponseError);
+    expect(() => extractWebhookList(undefined)).toThrowError(WebhookListResponseError);
+  });
+
+  it("uses a clear, recognizable error message", () => {
+    expect(() => extractWebhookList(null)).toThrow(/Unexpected response shape/);
+    expect(() => extractWebhookList(null)).toThrow(/WebHookApi\/list/);
   });
 });
 
@@ -106,6 +141,14 @@ describe("getWebhookUrl / webhookMatches", () => {
 describe("planWebhookActions (idempotency)", () => {
   it("creates both when nothing exists", () => {
     const plan = planWebhookActions({ existing: [], url: URL_OK });
+    expect(plan.map((p) => p.action)).toEqual(["create", "create"]);
+  });
+
+  it("still plans correctly when fed a strictly-parsed valid empty list", () => {
+    // The strict parser returns [] for a valid empty envelope; the planner then
+    // plans to create both events.
+    const existing = extractWebhookList({ items: [] });
+    const plan = planWebhookActions({ existing, url: URL_OK });
     expect(plan.map((p) => p.action)).toEqual(["create", "create"]);
   });
 

@@ -87,6 +87,11 @@ The one-time setup script is `scripts/register-nicky-webhooks.mjs`
 - **HTTP error listing/creating.** Verify the API key is valid and
   `NICKY_API_BASE_URL` is correct. Use `--dry-run` to validate inputs without
   calling Nicky.
+- **"Unexpected response shape from /api/public/WebHookApi/list".** The list
+  endpoint returned something the script doesn't recognize (only a bare array,
+  `{ items: [...] }`, or `{ data: [...] }` are accepted). The script fails safely
+  here and creates **nothing**, to avoid creating duplicate webhooks. Inspect the
+  raw list response and re-run once the shape is recognized.
 - Remember this is a **setup-only** script. It is not deployed and does not run
   in production. The plugin runtime only *processes* webhooks.
 
