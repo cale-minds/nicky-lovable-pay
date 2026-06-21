@@ -2,8 +2,59 @@ import { describe, it, expect } from "vitest";
 import {
   isOverRateLimit,
   decideClaimAction,
+  mergeMetadata,
+  buildPersistFailureBody,
+  PERSIST_FAILURE_MESSAGE,
   type ClaimOutcome,
 } from "../supabase/functions/_shared/create-payment-helpers";
+
+describe("mergeMetadata", () => {
+  it("preserves existing app-specific metadata while adding flags", () => {
+    const existing = { userId: "u1", sku: "PRO", cartId: "c9" };
+    const merged = mergeMetadata(existing, { needs_operator_review: true });
+    expect(merged).toEqual({
+      userId: "u1",
+      sku: "PRO",
+      cartId: "c9",
+      needs_operator_review: true,
+    });
+  });
+
+  it("patch overrides only the same keys", () => {
+    const merged = mergeMetadata({ a: 1, flag: false }, { flag: true });
+    expect(merged).toEqual({ a: 1, flag: true });
+  });
+
+  it("handles null/undefined existing metadata safely", () => {
+    expect(mergeMetadata(null, { x: 1 })).toEqual({ x: 1 });
+    expect(mergeMetadata(undefined, { x: 1 })).toEqual({ x: 1 });
+  });
+
+  it("does not mutate the existing object", () => {
+    const existing = { a: 1 };
+    mergeMetadata(existing, { b: 2 });
+    expect(existing).toEqual({ a: 1 });
+  });
+});
+
+describe("buildPersistFailureBody / PERSIST_FAILURE_MESSAGE", () => {
+  it("returns only safe operational fields", () => {
+    const body = buildPersistFailureBody("order-123");
+    expect(body).toEqual({ orderId: "order-123", retryable: false, needsReview: true });
+  });
+
+  it("never exposes payment identifiers", () => {
+    const body = buildPersistFailureBody("order-123") as Record<string, unknown>;
+    expect(body).not.toHaveProperty("paymentUrl");
+    expect(body).not.toHaveProperty("nickyShortId");
+    expect(body).not.toHaveProperty("nickyPaymentRequestId");
+  });
+
+  it("has a clear, actionable message", () => {
+    expect(PERSIST_FAILURE_MESSAGE).toMatch(/created at Nicky/i);
+    expect(PERSIST_FAILURE_MESSAGE).toMatch(/manual review/i);
+  });
+});
 
 describe("isOverRateLimit", () => {
   it("is disabled when max <= 0", () => {

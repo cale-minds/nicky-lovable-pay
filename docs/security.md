@@ -183,6 +183,17 @@ conservatively rather than risk a **duplicate** Payment Request:
   dashboard by invoice reference, then either link the existing request id or
   clear the flag to allow a fresh attempt.
 
+**No payment URL is returned on local-persistence failure.** If Nicky
+successfully creates the Payment Request but the local `nicky_orders` write then
+fails, the function returns `500` with **no** `paymentUrl` / `nickyShortId` /
+`nickyPaymentRequestId` — only `{ orderId, retryable: false, needsReview: true }`.
+This prevents the browser (or an integration client) from redirecting a payer to
+an **orphaned** request that the local app cannot reconcile automatically. The
+Nicky identifiers are logged server-side and best-effort written to
+`metadata` (`review_reason = "nicky_created_local_persist_failed"` plus
+`possible_orphaned_*` fields) for operator recovery — never returned to the
+client. Recovery is a manual operator process documented in `docs/operations.md`.
+
 **Known limitation / TODO:** this is intentionally conservative — a transient
 network error that occurred *before* Nicky created anything will still require
 manual review (we cannot distinguish "failed before the call reached Nicky" from
