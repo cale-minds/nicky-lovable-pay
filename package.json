@@ -16,7 +16,6 @@
   "files": [
     "src/nicky",
     "supabase",
-    "scripts",
     "docs",
     "README.md"
   ],
@@ -25,8 +24,7 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "typecheck:edge": "deno check supabase/functions/nicky-create-payment/index.ts supabase/functions/nicky-list-assets/index.ts supabase/functions/nicky-webhook/index.ts supabase/functions/nicky-sync-payment-status/index.ts supabase/functions/nicky-reconcile-open-orders/index.ts",
-    "ci": "npm run typecheck && npm test",
-    "nicky:register-webhooks": "node scripts/register-nicky-webhooks.mjs"
+    "ci": "npm run typecheck && npm test"
   },
   "peerDependencies": {
     "react": ">=18"

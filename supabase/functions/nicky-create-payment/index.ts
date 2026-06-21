@@ -102,22 +102,12 @@ Deno.serve(async (req) => {
         ? (body.metadata as Record<string, unknown>)
         : {};
 
-    // --- 2. Optional soft rate limit (defense-in-depth only) --------------
-    // Disabled unless NICKY_CREATE_RATE_LIMIT_PER_HOUR > 0. This is a weak,
-    // per-payer-email cap; real protection should be app auth + WAF/Cloudflare.
-    if (env.createRateLimitPerHour > 0) {
-      const sinceIso = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-      const { count, error: countErr } = await supabase
-        .from("nicky_orders")
-        .select("id", { count: "exact", head: true })
-        .eq("payer_email", payerEmail)
-        .gte("created_at", sinceIso);
-      if (!countErr && isOverRateLimit(count ?? 0, env.createRateLimitPerHour)) {
-        return errorResponse("Too many payment attempts. Please try again later.", 429);
-      }
-    }
-
-    // --- 3. Atomic create-or-claim ----------------------------------------
+    // --- 2. Atomic create-or-claim ----------------------------------------
+    // NOTE: idempotency is resolved BEFORE any rate limiting. A legitimate retry
+    // that maps to an existing order with a payment_url must always get that URL
+    // back, even if the soft creation rate limit would otherwise be exceeded.
+    // The rate limit is applied later, only when this invocation is actually
+    // about to create a NEW Nicky Payment Request (action === "owns_creation").
     const { data: claimRows, error: claimErr } = await supabase.rpc(
       "nicky_create_or_claim_order",
       {
@@ -149,6 +139,7 @@ Deno.serve(async (req) => {
       nickyPaymentRequestId: claimRow.nicky_payment_request_id ?? null,
       nickyShortId: claimRow.nicky_short_id ?? null,
       claimed: claimRow.claimed === true,
+      needsReview: claimRow.needs_review === true,
     };
     const orderId = outcome.orderId;
     const action = decideClaimAction(outcome);
@@ -183,7 +174,8 @@ Deno.serve(async (req) => {
 
     if (action === "in_progress") {
       // Another concurrent invocation owns creation for this idempotency key.
-      // We must NOT create a parallel Nicky Payment Request.
+      // We must NOT create a parallel Nicky Payment Request. Rate limiting is
+      // intentionally NOT applied here (no new Nicky request is being created).
       return errorResponse(
         "Payment creation already in progress for this order. Please retry shortly.",
         409,
@@ -191,9 +183,51 @@ Deno.serve(async (req) => {
       );
     }
 
+    if (action === "needs_review") {
+      // A previous attempt called Nicky but never persisted linkage, so we
+      // cannot tell whether a Nicky Payment Request already exists. Auto-creating
+      // again risks a duplicate. Require operator review (see docs/operations.md).
+      await supabase
+        .from("nicky_orders")
+        .update({
+          status: "failed",
+          metadata: { ...metadata, needs_operator_review: true, review_reason: "nicky_create_attempted_no_linkage" },
+        })
+        .eq("id", orderId);
+      return errorResponse(
+        "This payment needs manual review before it can be retried. A previous " +
+          "creation attempt may have reached Nicky without being linked locally.",
+        409,
+        { orderId, retryable: false, needsReview: true },
+      );
+    }
+
     // action === "owns_creation": this invocation won the claim.
 
-    // --- 5. Call Nicky -----------------------------------------------------
+    // --- 5. Optional soft rate limit (defense-in-depth only) --------------
+    // Applied ONLY now that we are about to create a NEW Nicky Payment Request.
+    // Idempotent retries (return_existing) and in_progress already returned above,
+    // so a legitimate retry is never blocked by this cap. Disabled unless
+    // NICKY_CREATE_RATE_LIMIT_PER_HOUR > 0. This is a weak per-payer-email cap;
+    // real protection should be app auth + WAF/Cloudflare (see docs/security.md).
+    if (env.createRateLimitPerHour > 0) {
+      const sinceIso = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+      const { count, error: countErr } = await supabase
+        .from("nicky_orders")
+        .select("id", { count: "exact", head: true })
+        .eq("payer_email", payerEmail)
+        .gte("created_at", sinceIso);
+      if (!countErr && isOverRateLimit(count ?? 0, env.createRateLimitPerHour)) {
+        // Release our claim so a legitimate later attempt isn't blocked by it.
+        await supabase
+          .from("nicky_orders")
+          .update({ creation_claimed_at: null })
+          .eq("id", orderId);
+        return errorResponse("Too many payment attempts. Please try again later.", 429);
+      }
+    }
+
+    // --- 6. Call Nicky -----------------------------------------------------
     const nickyBody: CreatePaymentRequestBody = {
       blockchainAssetId,
       amountExpectedNative,
@@ -203,6 +237,18 @@ Deno.serve(async (req) => {
       successUrl,
       cancelUrl,
     };
+
+    // EXTERNAL-CALL CONSISTENCY: mark that we are about to call Nicky BEFORE the
+    // request. If the call succeeds but the local persistence below fails, this
+    // flag lets the create-or-claim RPC refuse an automatic stale re-claim
+    // (returning needs_review) instead of risking a DUPLICATE Nicky Payment
+    // Request. Nicky's public API has no documented idempotent-create or
+    // lookup-by-invoice-reference, so this marker is the safe mitigation.
+    // See docs/operations.md and docs/security.md.
+    await supabase
+      .from("nicky_orders")
+      .update({ nicky_create_attempted_at: new Date().toISOString() })
+      .eq("id", orderId);
 
     const pr = await createPaymentRequest(env, nickyBody);
 
@@ -217,9 +263,10 @@ Deno.serve(async (req) => {
         contractErr instanceof PaymentRequestContractError
           ? contractErr.message
           : "Nicky returned an unusable create response.";
-      // Mark failed + persist raw response. We intentionally leave
-      // creation_claimed_at set so retries are gated by the stale window until
-      // an operator can inspect (a retry after the window can re-attempt).
+      // Mark failed + persist raw response. Because nicky_create_attempted_at is
+      // set, a later stale retry will resolve to `needs_review` (not an auto
+      // re-create) — Nicky may or may not have created a request, so an operator
+      // must check before reattempting. See docs/operations.md.
       await supabase
         .from("nicky_orders")
         .update({ status: "failed", nicky_create_response: pr })
@@ -229,7 +276,7 @@ Deno.serve(async (req) => {
 
     const paymentUrl = buildPaymentUrl(env, shortId);
 
-    // --- 6. Persist --------------------------------------------------------
+    // --- 7. Persist --------------------------------------------------------
     const { error: updErr } = await supabase
       .from("nicky_orders")
       .update({

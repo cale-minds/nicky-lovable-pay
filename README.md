@@ -77,15 +77,11 @@ never proof.
 │   ├── setup.md                 # step-by-step setup
 │   ├── security.md              # the security model (read this)
 │   ├── webhooks.md              # webhook flow, IP validation, idempotency
-│   ├── webhook-registration.md  # one-time setup script for webhook registration
+│   ├── webhook-registration.md  # one-time MANUAL webhook setup (no script)
 │   ├── production-checklist.md  # pre-launch checklist
 │   ├── operations.md            # day-2 runbook
 │   ├── lovable-install-prompt.md# copy-paste prompt for Lovable
 │   └── troubleshooting.md
-├── scripts/                     # SETUP-ONLY helpers (not runtime, not Edge Fns)
-│   ├── register-nicky-webhooks.mjs
-│   ├── webhook-registration-helpers.mjs
-│   └── .env.webhook.example
 ├── supabase/
 │   ├── config.toml              # per-function verify_jwt settings
 │   ├── migrations/
@@ -165,30 +161,23 @@ webhooks and abandoned redirects. It is **not** publicly callable: set
 `NICKY_RECONCILIATION_SECRET` and invoke it with the
 `x-nicky-reconciliation-secret` header (see [`docs/operations.md`](docs/operations.md)).
 
-### 6. Register the webhook once (setup script — not a runtime function)
+### 6. Configure the webhook once (manual — no script)
 
 This plugin **only processes** webhooks at runtime — it does **not** create,
-list, update, or delete them. Webhook registration is a **one-time setup step**,
-done with the included helper script (or the Lovable/Claude setup flow). It is
-**not** a deployed Edge Function.
+list, update, or delete them, and it ships **no** local script that calls Nicky's
+webhook setup endpoints. Webhook configuration is a **one-time manual step**,
+done in Nicky (the Lovable setup prompt walks you through it).
 
-Run it **after** deploying the functions (the callback URL is only known then):
+**After** deploying the functions (the callback URL is only known then),
+configure the webhook in Nicky pointing both required events at the fixed
+callback URL:
 
-```bash
-NICKY_API_KEY=your_key \
-NICKY_WEBHOOK_URL=https://<project-ref>.functions.supabase.co/nicky-webhook \
-  npm run nicky:register-webhooks
-```
+- Callback URL (do **not** use any other): `https://<project-ref>.functions.supabase.co/nicky-webhook`
+- Events: `PaymentRequest_ReportAdded` and `PaymentRequest_StatusChanged`
 
-The script is **idempotent**: it lists existing webhooks and only creates the
-missing ones (`PaymentRequest_ReportAdded`, `PaymentRequest_StatusChanged`) for
-the fixed callback URL `https://<project-ref>.functions.supabase.co/nicky-webhook`.
-It never deletes or updates webhooks, and it never exposes the API key. The URL
-is fixed and owned by the kit — arbitrary callback URLs are rejected.
-
-See [`docs/webhook-registration.md`](docs/webhook-registration.md) for details,
-and [`scripts/.env.webhook.example`](scripts/.env.webhook.example) for the
-setup-only variables.
+See [`docs/webhook-registration.md`](docs/webhook-registration.md) for the manual
+setup details and [`docs/lovable-install-prompt.md`](docs/lovable-install-prompt.md)
+for the guided flow.
 
 ### 7. Schedule reconciliation (recommended)
 
@@ -206,7 +195,8 @@ npm test               # vitest unit tests
 npm run typecheck:edge # Deno check of Edge Function entrypoints (needs Deno + network)
 ```
 
-CI runs the same checks on every push/PR (`.github/workflows/ci.yml`). Work
+CI runs the same checks on every push/PR (`.github/workflows/ci.yml`), and the
+Deno edge-check job is **blocking** (CI fails if `typecheck:edge` fails). Work
 through [`docs/production-checklist.md`](docs/production-checklist.md) before
 going live.
 

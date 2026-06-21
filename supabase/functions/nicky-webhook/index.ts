@@ -7,12 +7,17 @@
 // Security posture (see docs/security.md and docs/webhooks.md):
 //   1. POST only.
 //   2. Validate the source IP is Nicky's (`NICKY_WEBHOOK_ALLOWED_IP`,
-//      default 20.76.240.81).
-//   3. Store the raw event idempotently BEFORE processing (full audit trail).
+//      default 20.76.240.81), using only the first x-forwarded-for entry.
+//   3. Store the raw event BEFORE processing (full audit trail), with a
+//      `processing_status` lifecycle. Only 'processed' means success.
 //   4. Do NOT trust the webhook body's status. Use `itemId` to re-query Nicky
 //      server-side and only then update the local order. An order only becomes
 //      `paid` if Nicky returns `Finished`.
-//   5. Acknowledge duplicates with 200 so Nicky stops retrying.
+//   5. Safe dedupe: a redelivery acks as a duplicate only if the prior event
+//      truly succeeded ('processed') or is structurally unusable
+//      ('failed_non_retryable'). A prior 'rejected' (unauthorized IP) event must
+//      NOT block a later AUTHORIZED delivery — that closes a dedupe-poisoning
+//      hole. See _shared/webhook-dedupe-helpers.ts.
 //
 // NOTE ON PROXY HEADERS: Supabase fronts functions with a proxy, so the direct
 // socket IP is not Nicky's. We therefore read `x-forwarded-for`. Because that
@@ -29,6 +34,7 @@ import { getServiceClient } from "../_shared/db.ts";
 import { reconcileOrder } from "../_shared/reconcile.ts";
 import { NickyApiError } from "../_shared/nicky.ts";
 import { checkWebhookIp } from "../_shared/webhook-ip.ts";
+import { decideDuplicateAction } from "../_shared/webhook-dedupe-helpers.ts";
 
 /** Stable dedupe key for an event, used to enforce idempotency. */
 function buildDedupeKey(payload: Record<string, unknown>): string {
@@ -80,9 +86,9 @@ Deno.serve(async (req, connInfo) => {
     "user-agent": req.headers.get("user-agent"),
   };
 
-  // 3. Store raw event idempotently BEFORE processing.
-  //    On conflict (redelivery), this is a no-op insert; we detect that and
-  //    return success without reprocessing.
+  // 3. Store the raw event BEFORE processing (full audit trail), with an
+  //    initial processing_status of 'received'. We do NOT mark anything
+  //    'processed' here.
   const { data: inserted, error: insertErr } = await supabase
     .from("nicky_webhook_events")
     .insert({
@@ -96,6 +102,7 @@ Deno.serve(async (req, connInfo) => {
       ip_allowed: ipAllowed,
       raw_payload: payload,
       raw_headers: selectedHeaders,
+      processing_status: "received",
       processed: false,
     })
     .select("id")
@@ -104,42 +111,62 @@ Deno.serve(async (req, connInfo) => {
   let eventId = inserted?.id as string | undefined;
 
   if (insertErr) {
-    // Unique violation => this exact event was recorded before (a redelivery).
+    // Unique violation => this dedupe key was recorded before (a redelivery,
+    // OR a poisoning attempt that pre-inserted the key). Decide what to do based
+    // on the PRIOR event's processing_status and whether THIS request is
+    // authorized — a previously 'rejected' (unauthorized) event must never block
+    // a later authorized Nicky delivery. See _shared/webhook-dedupe-helpers.ts.
     if ((insertErr as { code?: string }).code === "23505") {
-      // Load the prior record. If it was already processed SUCCESSFULLY, ack the
-      // duplicate without redoing work. If a previous attempt did NOT finish
-      // successfully (processed = false), we REPROCESS it now: webhooks must not
-      // be permanently lost just because the first attempt errored.
       const { data: prior } = await supabase
         .from("nicky_webhook_events")
-        .select("id, processed")
+        .select("id, processing_status")
         .eq("dedupe_key", dedupeKey)
         .maybeSingle();
 
-      if (prior?.processed === true) {
-        return json({ ok: true, duplicate: true, alreadyProcessed: true });
+      const action = decideDuplicateAction(prior, ipAllowed);
+
+      if (action === "duplicate_ack") {
+        return json({
+          ok: true,
+          duplicate: true,
+          alreadyProcessed: prior?.processing_status === "processed",
+        });
       }
-      if (prior?.id) {
-        // Fall through and reprocess against the prior event row.
-        eventId = prior.id as string;
-      } else {
-        // Couldn't load the prior row; safest is to ack so Nicky stops retrying
-        // (the original record exists for audit).
+      if (action === "reject") {
+        // Current request is unauthorized; do not let it touch the prior record.
+        console.warn("Rejected duplicate webhook from unauthorized IP", clientIp ?? "(unknown)");
+        return errorResponse("Forbidden: source IP not allowed.", 403);
+      }
+      // action === "reprocess": a legitimate, authorized delivery. Reuse the
+      // existing audit row and reset it for a fresh processing attempt.
+      if (!prior?.id) {
         return json({ ok: true, duplicate: true });
       }
+      eventId = prior.id as string;
+      await supabase
+        .from("nicky_webhook_events")
+        .update({ processing_status: "received", processed: false, processing_error: null })
+        .eq("id", eventId);
     } else {
       console.error("failed to store webhook event", insertErr.message);
       return errorResponse("Failed to record webhook event.", 500);
     }
   }
 
-  // Reject (but keep the audit record) if the IP is not Nicky's.
+  // 3b. IP gate. Applies to fresh inserts; the reprocess path above only runs
+  //     for authorized requests, so this is a no-op there. Unauthorized events
+  //     are marked 'rejected' (NOT 'processed'), so they never poison dedupe.
   if (!ipAllowed) {
     console.warn("Rejected webhook from unauthorized IP", clientIp ?? "(unknown)");
     if (eventId) {
       await supabase
         .from("nicky_webhook_events")
-        .update({ processed: true, processing_error: "rejected: unauthorized source IP", processed_at: new Date().toISOString() })
+        .update({
+          processing_status: "rejected",
+          processed: false,
+          processing_error: "rejected: unauthorized source IP",
+          processed_at: new Date().toISOString(),
+        })
         .eq("id", eventId);
     }
     return errorResponse("Forbidden: source IP not allowed.", 403);
@@ -150,10 +177,14 @@ Deno.serve(async (req, connInfo) => {
     if (eventId) {
       await supabase
         .from("nicky_webhook_events")
-        .update({ processed: true, processing_error: "missing itemId", processed_at: new Date().toISOString() })
+        .update({
+          processing_status: "failed_non_retryable",
+          processing_error: "missing itemId",
+          processed_at: new Date().toISOString(),
+        })
         .eq("id", eventId);
     }
-    // Still a 200 so Nicky doesn't retry a structurally-fine-but-unusable event.
+    // 200 so Nicky doesn't retry a structurally-unusable event.
     return json({ ok: true, note: "No itemId; nothing to reconcile." });
   }
 
@@ -171,6 +202,7 @@ Deno.serve(async (req, connInfo) => {
       await supabase
         .from("nicky_webhook_events")
         .update({
+          processing_status: "processed", // the ONLY success state
           processed: true,
           processed_at: new Date().toISOString(),
           order_id: result.orderId ?? null,
@@ -189,9 +221,10 @@ Deno.serve(async (req, connInfo) => {
     const message = err instanceof NickyApiError ? `Nicky lookup failed (${err.status})` : (err as Error).message;
     console.error("webhook reconcile failed", message);
     if (eventId) {
+      // Retryable: a later redelivery (or a manual retry) can reprocess.
       await supabase
         .from("nicky_webhook_events")
-        .update({ processing_error: message })
+        .update({ processing_status: "failed_retryable", processing_error: message })
         .eq("id", eventId);
     }
     // Return 500 so Nicky retries; the raw event is already stored.

@@ -100,7 +100,7 @@ supabase secrets set NICKY_RECONCILIATION_SECRET=$(openssl rand -hex 32)
 > there is no `nicky-register-webhooks` function and no `WEBHOOK_CALLBACK_URL`
 > secret.
 
-## 7. Register the webhook once (setup script)
+## 7. Configure the webhook once (manual — no script)
 
 The callback URL is only known **after** deployment and is fixed:
 
@@ -108,29 +108,18 @@ The callback URL is only known **after** deployment and is fixed:
 https://<project-ref>.functions.supabase.co/nicky-webhook
 ```
 
-Register it **once** using the included setup script (Node 18+, no
-dependencies). This is a one-time setup step — **not** an Edge Function and
-**not** part of the runtime:
-
-```bash
-NICKY_API_KEY=your_key \
-NICKY_WEBHOOK_URL=https://<project-ref>.functions.supabase.co/nicky-webhook \
-  npm run nicky:register-webhooks
-```
-
-The script is **idempotent**: it lists existing webhooks and creates only the
-missing ones for both required events:
+Configure the webhook **once** in Nicky (via the Lovable setup prompt or manually
+in the Nicky dashboard), pointing both required events at that URL:
 
 - `PaymentRequest_ReportAdded`
 - `PaymentRequest_StatusChanged`
 
-It never deletes or updates webhooks, never exposes the API key, and rejects any
-URL that isn't the fixed `/nicky-webhook` route. Run it from a trusted local /
-setup environment. Add `--dry-run` to validate inputs without calling Nicky.
-
-See `docs/webhook-registration.md` and `scripts/.env.webhook.example` for
-details. The plugin itself never registers/updates/deletes webhooks in
-production — it only processes them.
+There is **no** repository script and **no** runtime function that registers
+webhooks. Do not use any callback URL other than the fixed one above. See
+[`webhook-registration.md`](webhook-registration.md) for the manual setup details
+and [`lovable-install-prompt.md`](lovable-install-prompt.md) for the guided flow.
+The plugin itself never registers/lists/updates/deletes webhooks — it only
+processes them.
 
 ## 8. Wire up the frontend
 

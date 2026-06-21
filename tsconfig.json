@@ -25,6 +25,7 @@
     "supabase/functions/_shared/webhook-ip.ts",
     "supabase/functions/_shared/reconcile-helpers.ts",
     "supabase/functions/_shared/create-payment-helpers.ts",
-    "supabase/functions/_shared/reconcile-open-orders-helpers.ts"
+    "supabase/functions/_shared/reconcile-open-orders-helpers.ts",
+    "supabase/functions/_shared/webhook-dedupe-helpers.ts"
   ]
 }

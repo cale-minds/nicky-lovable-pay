@@ -26,9 +26,11 @@ STRICT RULES — follow all of these:
   assets must be loaded from Nicky at runtime via GET /AcceptedAsset/get-for-user.
 - The webhook callback route is fixed and owned by the kit. Do not let the user
   choose arbitrary callback URLs.
-- Do NOT register, list, or delete webhooks at runtime, and do NOT create a
-  nicky-register-webhooks function. The plugin only PROCESSES webhooks. Webhook
-  setup in Nicky is a one-time step done outside the plugin runtime.
+- Do NOT register, list, update, or delete webhooks at runtime, and do NOT create
+  a nicky-register-webhooks function. Do NOT add any local script that calls
+  Nicky's webhook setup endpoints. The plugin only PROCESSES webhooks. Webhook
+  setup in Nicky is a one-time MANUAL step done outside the plugin (you will guide
+  the user through it).
 
 WHAT TO INSTALL:
 1. Supabase migration: create tables nicky_orders, nicky_payment_requests,
@@ -99,15 +101,15 @@ PRODUCTION RULES:
 - Add rate limiting / abuse control (app auth + WAF/Cloudflare; optionally the
   built-in soft cap).
 
-WEBHOOK REGISTRATION RULES:
+WEBHOOK SETUP RULES (no script, no runtime function):
 - Do NOT create a nicky-register-webhooks Edge Function.
 - Do NOT deploy webhook-registration code as an Edge Function.
-- Do NOT delete or update webhooks.
-- Do NOT expose the Nicky API key (it is used only by the local setup script).
-- Do NOT let users choose arbitrary callback URLs in any runtime UI.
-- Webhook registration is a ONE-TIME setup step run via the included script
-  scripts/register-nicky-webhooks.mjs (npm run nicky:register-webhooks), which
-  is idempotent and only creates missing webhooks.
+- Do NOT add any local script that calls Nicky's webhook setup endpoints.
+- Do NOT create, list, update, or delete webhooks from the plugin.
+- Do NOT let users choose arbitrary callback URLs anywhere.
+- Webhook setup is a ONE-TIME MANUAL step the user performs in Nicky, pointing the
+  fixed callback URL at both required events. Guide the user through it after the
+  Edge Functions are deployed.
 
 AFTER INSTALLING, tell me (the user) to:
 1) set the NICKY_API_KEY secret (and NICKY_RECONCILIATION_SECRET),
@@ -115,16 +117,16 @@ AFTER INSTALLING, tell me (the user) to:
 3) deploy the Edge Functions (four runtime + nicky-reconcile-open-orders),
 4) derive (or ask me for) the deployed webhook URL:
    https://<project-ref>.functions.supabase.co/nicky-webhook,
-5) run the one-time setup script:
-   NICKY_API_KEY=... NICKY_WEBHOOK_URL=https://<project-ref>.functions.supabase.co/nicky-webhook \
-     npm run nicky:register-webhooks
-   (the script reads the setup-only vars NICKY_API_KEY, optional
-   NICKY_API_BASE_URL, and NICKY_WEBHOOK_URL — see scripts/.env.webhook.example),
-6) confirm that BOTH events (PaymentRequest_ReportAdded and
-   PaymentRequest_StatusChanged) were either created or already existed,
+5) configure the webhook ONCE in Nicky (manually in the Nicky dashboard — there
+   is NO script for this), pointing that exact URL at both events
+   PaymentRequest_ReportAdded and PaymentRequest_StatusChanged; do not use any
+   other callback URL,
+6) trigger a test payment and confirm a row in nicky_webhook_events reaches
+   processing_status = 'processed',
 7) schedule nicky-reconcile-open-orders (with the x-nicky-reconciliation-secret
    header) every few minutes,
-8) run npm ci && npm run typecheck && npm test (CI) before deploying,
+8) run npm ci && npm run typecheck && npm test && npm run typecheck:edge (CI)
+   before deploying,
 9) wire the frontend checkout UI using the provided components.
 
 Confirm payment ONLY via a server-side Nicky lookup. Treat the success redirect
@@ -138,7 +140,6 @@ and the webhook as signals, never as proof of payment.
 Follow the post-install steps in [`setup.md`](setup.md), then work through
 [`production-checklist.md`](production-checklist.md). In short: set the secrets,
 run the migration, deploy the functions (incl. `nicky-reconcile-open-orders`),
-run the one-time webhook registration script
-(`npm run nicky:register-webhooks` — see
+configure the webhook once **manually** in Nicky (no script — see
 [`webhook-registration.md`](webhook-registration.md)), schedule reconciliation
 (see [`operations.md`](operations.md)), and wire the checkout UI.

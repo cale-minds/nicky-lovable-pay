@@ -73,27 +73,28 @@ The source IP didn't match `NICKY_WEBHOOK_ALLOWED_IP`. Check:
 
 The event is still recorded even when rejected, so you can debug after the fact.
 
-## Webhook registration script fails or seems to do nothing
+## Webhook isn't being received / not configured
 
-The one-time setup script is `scripts/register-nicky-webhooks.mjs`
-(`npm run nicky:register-webhooks`). Common issues:
+There is **no** repository script and **no** runtime function that registers
+webhooks — configuration is a one-time manual step in Nicky (or via the Lovable
+setup prompt). Checklist:
 
-- **"NICKY_API_KEY is required" / "NICKY_WEBHOOK_URL is required".** Provide both
-  env vars (see `scripts/.env.webhook.example`).
-- **"NICKY_WEBHOOK_URL must use HTTPS" / "must end with `/nicky-webhook`".** The
-  URL is fixed: `https://<project-ref>.functions.supabase.co/nicky-webhook`.
-- **"already registered for this URL (no change)".** This is expected and correct
-  — the script is idempotent, so re-running it does not create duplicates.
-- **HTTP error listing/creating.** Verify the API key is valid and
-  `NICKY_API_BASE_URL` is correct. Use `--dry-run` to validate inputs without
-  calling Nicky.
-- **"Unexpected response shape from /api/public/WebHookApi/list".** The list
-  endpoint returned something the script doesn't recognize (only a bare array,
-  `{ items: [...] }`, or `{ data: [...] }` are accepted). The script fails safely
-  here and creates **nothing**, to avoid creating duplicate webhooks. Inspect the
-  raw list response and re-run once the shape is recognized.
-- Remember this is a **setup-only** script. It is not deployed and does not run
-  in production. The plugin runtime only *processes* webhooks.
+- Confirm the webhook is configured in Nicky for **both** events
+  (`PaymentRequest_ReportAdded`, `PaymentRequest_StatusChanged`).
+- Confirm the callback URL is exactly
+  `https://<project-ref>.functions.supabase.co/nicky-webhook` (no other URL).
+- Confirm `nicky-webhook` is deployed with `verify_jwt = false`.
+- Inspect `nicky_webhook_events` for incoming deliveries and their
+  `processing_status` (`received` / `processed` / `rejected` /
+  `failed_retryable` / `failed_non_retryable`).
+
+## Legitimate webhook seems "skipped" as a duplicate
+
+The dedupe logic only acks as a duplicate when the prior event for that dedupe
+key is `processed` (success) or `failed_non_retryable`. A prior `rejected`
+(unauthorized IP) event does **not** block a later authorized delivery — it is
+reprocessed. If a real event still looks skipped, check the prior row's
+`processing_status` and `ip_allowed` in `nicky_webhook_events`.
 
 ## Order never becomes `paid`
 

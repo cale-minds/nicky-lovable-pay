@@ -2,8 +2,8 @@
 //
 // These headers allow the React frontend (running in the browser) to call the
 // public-facing functions (`nicky-create-payment`, `nicky-list-assets`,
-// `nicky-sync-payment-status`). The webhook and webhook-registration functions
-// are server-to-server and do not rely on browser CORS.
+// `nicky-sync-payment-status`). The webhook and scheduled-reconciliation
+// functions are server-to-server and do not rely on browser CORS.
 
 export const corsHeaders: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
