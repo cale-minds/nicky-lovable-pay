@@ -1,44 +1,19 @@
-// Thin client for the Nicky public API plus shared domain helpers.
+// Thin client for the Nicky public API.
 //
 // The Nicky API key is passed in by the caller (read from env) and sent as the
 // `x-api-key` header. This module performs no logging of the key.
+//
+// Scope: this plugin only CREATES payment requests, LOOKS UP their status, and
+// READS accepted assets. It intentionally does NOT register, list, or delete
+// webhooks — webhooks are configured once, outside the plugin runtime (see
+// docs/webhooks.md).
 
 import type { NickyEnv } from "./env.ts";
 
-export type NickyRemoteStatus =
-  | "PaymentPending"
-  | "PaymentValidationRequired"
-  | "Finished"
-  | "Canceled";
-
-export type NickyLocalStatus =
-  | "idle"
-  | "creating_payment"
-  | "redirecting_to_nicky"
-  | "waiting_payment"
-  | "webhook_received"
-  | "syncing_status"
-  | "paid"
-  | "validation_required"
-  | "canceled"
-  | "expired_or_abandoned"
-  | "failed";
-
-/** Maps a Nicky remote status to the kit's local status model. */
-export function mapRemoteStatus(remote: string | undefined): NickyLocalStatus {
-  switch (remote) {
-    case "PaymentPending":
-      return "waiting_payment";
-    case "PaymentValidationRequired":
-      return "validation_required";
-    case "Finished":
-      return "paid";
-    case "Canceled":
-      return "canceled";
-    default:
-      return "failed";
-  }
-}
+// Re-exported so existing importers keep working; the implementation lives in
+// the pure, testable status module.
+export { mapRemoteStatus } from "./status.ts";
+export type { NickyLocalStatus, NickyRemoteStatus } from "./status.ts";
 
 export interface CreatePaymentRequestBody {
   blockchainAssetId: string;
@@ -56,15 +31,15 @@ export interface CreatePaymentRequestBody {
   cancelUrl?: string;
 }
 
-/** Loose shape of the Nicky create/lookup responses. We keep the raw payload. */
+/**
+ * Loose shape of the Nicky create/lookup responses. We retain the full raw
+ * payload for audit; the contractually-required identifiers are extracted by
+ * `getRequiredPaymentRequestIdentifiers` in `./payment-identifiers.ts`.
+ */
 export interface NickyPaymentRequest {
   id?: string;
-  // Nicky returns the short/bill id under one of these keys depending on the
-  // endpoint version; we probe all of them.
-  shortId?: string;
-  billId?: string;
-  billShortId?: string;
-  status?: NickyRemoteStatus;
+  bill?: { shortId?: string; [key: string]: unknown };
+  status?: string;
   [key: string]: unknown;
 }
 
@@ -95,19 +70,6 @@ export class NickyApiError extends Error {
     this.status = status;
     this.body = body;
   }
-}
-
-/** Extracts the short id from a Nicky payment-request payload. */
-export function extractShortId(pr: NickyPaymentRequest | null | undefined): string | undefined {
-  if (!pr) return undefined;
-  return (
-    (pr.shortId as string) ||
-    (pr.billShortId as string) ||
-    (pr.billId as string) ||
-    // Some responses nest bill details.
-    ((pr.billDetails as Record<string, unknown> | undefined)?.shortId as string) ||
-    undefined
-  );
 }
 
 /** Builds the payer-facing redirect URL from a short id. */
@@ -159,65 +121,19 @@ export async function getPaymentRequestByShortId(
   return data as NickyPaymentRequest;
 }
 
-// ---------------------------------------------------------------------------
-// Webhook management
-// ---------------------------------------------------------------------------
-
-export type NickyWebhookType =
-  | "PaymentRequest_ReportAdded"
-  | "PaymentRequest_StatusChanged";
-
-export interface NickyWebhook {
-  id?: string;
-  webHookType?: NickyWebhookType;
-  url?: string;
-  callbackUrl?: string;
-  [key: string]: unknown;
-}
-
-/** GET /api/public/WebHookApi/list */
-export async function listWebhooks(env: NickyEnv): Promise<NickyWebhook[]> {
-  const res = await fetch(`${env.apiBaseUrl}/api/public/WebHookApi/list`, {
+/**
+ * GET /AcceptedAsset/get-for-user
+ *
+ * Returns the raw accepted-assets payload. Normalization (and empty/invalid
+ * handling) is done by `normalizeAcceptedAssets` in `./assets.ts`.
+ */
+export async function getAcceptedAssets(env: NickyEnv): Promise<unknown> {
+  const res = await fetch(`${env.apiBaseUrl}/AcceptedAsset/get-for-user`, {
     headers: authHeaders(env),
   });
   const data = await parseJsonSafe(res);
   if (!res.ok) {
-    throw new NickyApiError("Failed to list Nicky webhooks", res.status, data);
+    throw new NickyApiError("Failed to fetch accepted assets", res.status, data);
   }
-  // Tolerate either a bare array or an object wrapping `items`/`data`.
-  if (Array.isArray(data)) return data as NickyWebhook[];
-  const wrapped = data as Record<string, unknown> | null;
-  const items = (wrapped?.items ?? wrapped?.data) as NickyWebhook[] | undefined;
-  return items ?? [];
-}
-
-/** POST /api/public/WebHookApi/create */
-export async function createWebhook(
-  env: NickyEnv,
-  webHookType: NickyWebhookType,
-  url: string,
-): Promise<NickyWebhook> {
-  const res = await fetch(`${env.apiBaseUrl}/api/public/WebHookApi/create`, {
-    method: "POST",
-    headers: authHeaders(env),
-    body: JSON.stringify({ webHookType, url }),
-  });
-  const data = await parseJsonSafe(res);
-  if (!res.ok) {
-    throw new NickyApiError("Failed to create Nicky webhook", res.status, data);
-  }
-  return data as NickyWebhook;
-}
-
-/** POST /api/public/WebHookApi/delete */
-export async function deleteWebhook(env: NickyEnv, id: string): Promise<void> {
-  const res = await fetch(`${env.apiBaseUrl}/api/public/WebHookApi/delete`, {
-    method: "POST",
-    headers: authHeaders(env),
-    body: JSON.stringify({ id }),
-  });
-  if (!res.ok) {
-    const data = await parseJsonSafe(res);
-    throw new NickyApiError("Failed to delete Nicky webhook", res.status, data);
-  }
+  return data;
 }

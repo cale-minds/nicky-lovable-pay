@@ -2,16 +2,18 @@
 
 ## Assets don't load / `nicky-list-assets` returns 502
 
+Assets are read from the fixed Nicky endpoint `GET /AcceptedAsset/get-for-user`
+(there is no configurable endpoint).
+
 - **`NICKY_API_KEY` missing or wrong.** The function fails loudly if the secret
   isn't set. Run `supabase secrets list` and re-set it.
-- **Wrong assets endpoint.** The spec did not pin an assets-list path, so the
-  kit uses a configurable default
-  (`/api/public/PaymentRequestPublicApi/get-supported-assets`). If your account
-  exposes a different path, set `NICKY_ASSETS_ENDPOINT`. The 502 response
-  includes a `rawSample` to help you spot the right shape.
-- **Unexpected response shape.** `normalizeAsset()` probes common field names
-  (`blockchainAssetId`/`assetId`/`id`, `symbol`/`ticker`, etc.). If Nicky uses
-  different names, adjust that function.
+- **Empty asset list.** If Nicky returns no accepted assets for the account, the
+  function returns a clear `502` ("Nicky returned no accepted assets…"). Confirm
+  your Nicky account actually has accepted assets configured.
+- **Invalid response shape.** If the response can't be parsed into the expected
+  shape (fields `id`, `assetName`, `isFiat`, `decimalPrecisionUI`, `assetChain`,
+  `assetTicker`), the function returns a `502` with a clear message. Normalization
+  lives in `_shared/assets.ts` (`normalizeAcceptedAssets`).
 
 ## `nicky-create-payment` returns 400
 
@@ -32,13 +34,28 @@ Nicky rejected the create call. Check:
 - The function logs (`supabase functions logs nicky-create-payment`) for the
   Nicky status code.
 
+## `nicky-create-payment` returns 502 with "missing required `id` / `bill.shortId`"
+
+The Nicky create response must contain `response.id` (Payment Request UUID) and
+`response.bill.shortId` (used to build the payment link). The kit does **not**
+probe alternate field names — a missing identifier is treated as an exceptional
+API-contract violation. When this happens:
+
+- the local order is marked `failed`,
+- the raw response is saved in `nicky_orders.nicky_create_response`,
+- no `nicky_payment_requests` row is created,
+- no `paymentUrl` is returned.
+
+Inspect `nicky_orders.nicky_create_response` to see exactly what Nicky returned.
+If the real API has genuinely changed its contract, update
+`getRequiredPaymentRequestIdentifiers()` in `_shared/payment-identifiers.ts`.
+
 ## Redirect goes to a broken Nicky page
 
-The redirect URL is `https://pay.nicky.me/home?paymentId=<shortId>`. If the
-short id is missing/blank, the create response didn't contain a recognizable
-short id. The kit probes `shortId` / `billShortId` / `billId`. Inspect
-`nicky_orders.nicky_create_response` to see the actual response and adjust
-`extractShortId()` in `_shared/nicky.ts` if needed.
+The redirect URL is `https://pay.nicky.me/home?paymentId=<bill.shortId>`, built
+from the validated `response.bill.shortId`. If the page is broken, confirm the
+short id stored in `nicky_orders.nicky_short_id` matches what you see in the
+Nicky dashboard.
 
 ## Webhook returns 401
 

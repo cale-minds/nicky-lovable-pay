@@ -6,12 +6,12 @@
 # verify_jwt notes:
 #   * nicky-webhook MUST have verify_jwt = false — Nicky calls it server-to-
 #     server and cannot present a Supabase JWT. Security is enforced instead by
-#     source-IP validation + a server-side re-query (see the function code).
-#   * nicky-register-webhooks is an admin/setup action; verify_jwt = false lets
-#     you invoke it via curl during setup. Consider deleting/redeploying it
-#     behind protection after initial setup, or gate it with your own check.
+#     source-IP validation + a mandatory server-side re-query (see the code).
 #   * The frontend-facing functions keep verify_jwt = true so the Supabase anon
 #     key (sent by the React kit) is required.
+#
+# NOTE: this plugin does NOT register/list/delete webhooks at runtime. Webhooks
+# are configured once, outside the plugin runtime (see docs/webhooks.md).
 
 project_id = "your-project-ref"
 
@@ -25,7 +25,4 @@ verify_jwt = true
 verify_jwt = true
 
 [functions.nicky-webhook]
-verify_jwt = false
-
-[functions.nicky-register-webhooks]
 verify_jwt = false

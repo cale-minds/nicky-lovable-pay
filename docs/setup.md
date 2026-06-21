@@ -38,17 +38,19 @@ Optional overrides (defaults are sensible; only set if you need to change them):
 supabase secrets set NICKY_API_BASE_URL=https://api-public.pay.nicky.me
 supabase secrets set NICKY_PAY_BASE_URL=https://pay.nicky.me
 supabase secrets set NICKY_WEBHOOK_ALLOWED_IP=20.76.240.81
-# Only if your account's assets endpoint differs from the default:
-# supabase secrets set NICKY_ASSETS_ENDPOINT=/api/public/PaymentRequestPublicApi/get-supported-assets
 ```
+
+Accepted assets are read from the fixed endpoint
+`GET /AcceptedAsset/get-for-user` — there is no configurable assets endpoint.
 
 ## 4. Copy the kit files into your project
 
 From this repository, copy:
 
 - `supabase/migrations/001_nicky_payment_kit.sql` → your `supabase/migrations/`
-- `supabase/functions/_shared/` and the five `nicky-*` function folders →
-  your `supabase/functions/`
+- `supabase/functions/_shared/` and the four `nicky-*` function folders
+  (`nicky-create-payment`, `nicky-list-assets`, `nicky-webhook`,
+  `nicky-sync-payment-status`) → your `supabase/functions/`
 - `src/nicky/` → your app's `src/nicky/` (or wherever your alias `@/nicky`
   points)
 - Merge the `[functions.*]` blocks from `supabase/config.toml` into your own
@@ -75,37 +77,39 @@ service-role key (used by the Edge Functions) can access them. See
 
 ## 6. Deploy the Edge Functions
 
+The plugin ships exactly **four** functions:
+
 ```bash
 supabase functions deploy nicky-create-payment
 supabase functions deploy nicky-list-assets
 supabase functions deploy nicky-sync-payment-status
 supabase functions deploy nicky-webhook
-supabase functions deploy nicky-register-webhooks
 ```
 
 Verify `nicky-webhook` deployed with `verify_jwt = false` (otherwise Nicky's
 calls will be rejected with 401, because they carry no Supabase JWT).
 
-## 7. Register the webhooks
+> The plugin does **not** register, update, or delete webhooks at runtime, so
+> there is no `nicky-register-webhooks` function and no `WEBHOOK_CALLBACK_URL`
+> secret.
 
-The callback URL is only known **after** deployment:
+## 7. Configure the webhook in Nicky (once, outside the plugin)
+
+The callback URL is only known **after** deployment and is fixed:
 
 ```
 https://<project-ref>.functions.supabase.co/nicky-webhook
 ```
 
-Set it and run the registration function (idempotent — it lists existing
-webhooks first):
+Configure it **once** in Nicky — manually in the Nicky dashboard, or via the
+Lovable setup prompt — registering it for both required events:
 
-```bash
-supabase secrets set WEBHOOK_CALLBACK_URL=https://<project-ref>.functions.supabase.co/nicky-webhook
-supabase functions deploy nicky-register-webhooks
+- `PaymentRequest_ReportAdded`
+- `PaymentRequest_StatusChanged`
 
-curl -X POST https://<project-ref>.functions.supabase.co/nicky-register-webhooks
-```
-
-This registers both `PaymentRequest_ReportAdded` and
-`PaymentRequest_StatusChanged`. See `docs/webhooks.md` for details.
+Do not use arbitrary callback URLs; the route is fixed and owned by the kit.
+This is a one-time configuration step, not something the plugin performs in
+production. See `docs/webhooks.md` for details.
 
 ## 8. Wire up the frontend
 
