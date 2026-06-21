@@ -101,16 +101,37 @@ Deno.serve(async (req, connInfo) => {
     .select("id")
     .maybeSingle();
 
-  if (insertErr) {
-    // Unique violation => duplicate webhook already recorded. Ack it.
-    if ((insertErr as { code?: string }).code === "23505") {
-      return json({ ok: true, duplicate: true });
-    }
-    console.error("failed to store webhook event", insertErr.message);
-    return errorResponse("Failed to record webhook event.", 500);
-  }
+  let eventId = inserted?.id as string | undefined;
 
-  const eventId = inserted?.id as string | undefined;
+  if (insertErr) {
+    // Unique violation => this exact event was recorded before (a redelivery).
+    if ((insertErr as { code?: string }).code === "23505") {
+      // Load the prior record. If it was already processed SUCCESSFULLY, ack the
+      // duplicate without redoing work. If a previous attempt did NOT finish
+      // successfully (processed = false), we REPROCESS it now: webhooks must not
+      // be permanently lost just because the first attempt errored.
+      const { data: prior } = await supabase
+        .from("nicky_webhook_events")
+        .select("id, processed")
+        .eq("dedupe_key", dedupeKey)
+        .maybeSingle();
+
+      if (prior?.processed === true) {
+        return json({ ok: true, duplicate: true, alreadyProcessed: true });
+      }
+      if (prior?.id) {
+        // Fall through and reprocess against the prior event row.
+        eventId = prior.id as string;
+      } else {
+        // Couldn't load the prior row; safest is to ack so Nicky stops retrying
+        // (the original record exists for audit).
+        return json({ ok: true, duplicate: true });
+      }
+    } else {
+      console.error("failed to store webhook event", insertErr.message);
+      return errorResponse("Failed to record webhook event.", 500);
+    }
+  }
 
   // Reject (but keep the audit record) if the IP is not Nicky's.
   if (!ipAllowed) {

@@ -13,6 +13,11 @@ export interface NickyEnv {
   payBaseUrl: string;
   /** Allowed source IP for incoming webhooks. */
   webhookAllowedIp: string;
+  /**
+   * Optional soft per-payer-email creation cap, per hour. 0/unset disables it.
+   * Defense-in-depth only — see docs/security.md for production rate limiting.
+   */
+  createRateLimitPerHour: number;
 }
 
 function stripTrailingSlash(url: string): string {
@@ -45,7 +50,26 @@ export function getNickyEnv(requireApiKey = true): NickyEnv {
       Deno.env.get("NICKY_PAY_BASE_URL") ?? "https://pay.nicky.me",
     ),
     webhookAllowedIp: Deno.env.get("NICKY_WEBHOOK_ALLOWED_IP") ?? "20.76.240.81",
+    createRateLimitPerHour: parsePositiveInt(
+      Deno.env.get("NICKY_CREATE_RATE_LIMIT_PER_HOUR"),
+      0,
+    ),
   };
+}
+
+function parsePositiveInt(value: string | undefined, fallback: number): number {
+  if (!value) return fallback;
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : fallback;
+}
+
+/**
+ * Reads the shared secret that protects the scheduled reconciliation function.
+ * Returns "" if unset; callers must treat an unset secret as "not configured"
+ * and refuse to run rather than running unauthenticated.
+ */
+export function getReconciliationSecret(): string {
+  return Deno.env.get("NICKY_RECONCILIATION_SECRET") ?? "";
 }
 
 /** Supabase service-role client configuration (server-side only). */

@@ -77,17 +77,24 @@ service-role key (used by the Edge Functions) can access them. See
 
 ## 6. Deploy the Edge Functions
 
-The plugin ships exactly **four** functions:
+Four runtime functions plus the optional scheduled-reconciliation function:
 
 ```bash
 supabase functions deploy nicky-create-payment
 supabase functions deploy nicky-list-assets
 supabase functions deploy nicky-sync-payment-status
 supabase functions deploy nicky-webhook
+supabase functions deploy nicky-reconcile-open-orders
 ```
 
-Verify `nicky-webhook` deployed with `verify_jwt = false` (otherwise Nicky's
-calls will be rejected with 401, because they carry no Supabase JWT).
+Verify `nicky-webhook` and `nicky-reconcile-open-orders` deployed with
+`verify_jwt = false` (Nicky and your scheduler carry no Supabase JWT). The
+reconciliation function is protected by the `NICKY_RECONCILIATION_SECRET` header
+instead (set it as a secret):
+
+```bash
+supabase secrets set NICKY_RECONCILIATION_SECRET=$(openssl rand -hex 32)
+```
 
 > The plugin does **not** register, update, or delete webhooks at runtime, so
 > there is no `nicky-register-webhooks` function and no `WEBHOOK_CALLBACK_URL`
@@ -146,7 +153,27 @@ VITE_SUPABASE_ANON_KEY=<your anon key>
 Then use `useNickyAssets`, `NickyAssetSelector`, `NickyPayButton`,
 `useNickyPayment`, and `NickyPaymentStatus` as shown in the README.
 
-## 9. Test end-to-end
+## 9. Schedule reconciliation (recommended)
+
+Schedule `nicky-reconcile-open-orders` to run every few minutes so missed/delayed
+webhooks and abandoned redirects are still reconciled. Call it with the
+`x-nicky-reconciliation-secret` header (via Supabase cron / `pg_cron` + `pg_net`,
+or an external scheduler). See [`operations.md`](operations.md) for the exact
+invocation and scheduling patterns.
+
+## 10. Run CI checks before deploying
+
+```bash
+npm ci
+npm run typecheck       # pure modules + frontend kit
+npm test                # vitest unit tests
+npm run typecheck:edge  # Deno check of Edge Function entrypoints (needs Deno)
+```
+
+CI runs the same on every push/PR (`.github/workflows/ci.yml`). Then work through
+[`production-checklist.md`](production-checklist.md).
+
+## 11. Test end-to-end
 
 1. Load your checkout — the asset selector should populate from Nicky.
 2. Create a payment and confirm you're redirected to `pay.nicky.me`.
@@ -155,5 +182,9 @@ Then use `useNickyAssets`, `NickyAssetSelector`, `NickyPayButton`,
    show "paid" once Nicky reports `Finished`.
 5. Check `nicky_webhook_events` and `nicky_payment_status_checks` in your DB for
    the audit trail.
+6. Run the reconciliation job once with `{"dryRun": true}` to confirm it is wired
+   and authenticated (see [`operations.md`](operations.md)).
 
-See `docs/troubleshooting.md` if anything misbehaves.
+See [`troubleshooting.md`](troubleshooting.md) if anything misbehaves,
+[`operations.md`](operations.md) for the day-2 runbook, and
+[`production-checklist.md`](production-checklist.md) before launch.
