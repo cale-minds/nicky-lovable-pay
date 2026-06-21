@@ -138,14 +138,26 @@ Deno.serve(async (req, connInfo) => {
         return errorResponse("Forbidden: source IP not allowed.", 403);
       }
       // action === "reprocess": a legitimate, authorized delivery. Reuse the
-      // existing audit row and reset it for a fresh processing attempt.
+      // existing audit row but OVERWRITE it with THIS attempt's audit data, so a
+      // row that ends up 'processed' never carries the stale (possibly
+      // unauthorized) source_ip / ip_allowed / raw payload from the prior attempt.
       if (!prior?.id) {
         return json({ ok: true, duplicate: true });
       }
       eventId = prior.id as string;
       await supabase
         .from("nicky_webhook_events")
-        .update({ processing_status: "received", processed: false, processing_error: null })
+        .update({
+          processing_status: "received",
+          processed: false,
+          processing_error: null,
+          processed_at: null,
+          // Refresh audit fields to reflect the current (authorized) request.
+          source_ip: clientIp ?? null,
+          ip_allowed: ipAllowed,
+          raw_payload: payload,
+          raw_headers: selectedHeaders,
+        })
         .eq("id", eventId);
     } else {
       console.error("failed to store webhook event", insertErr.message);

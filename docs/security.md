@@ -189,7 +189,7 @@ manual review (we cannot distinguish "failed before the call reached Nicky" from
 "succeeded but local write failed"). If Nicky later exposes an idempotent-create
 header or lookup-by-invoice-reference, prefer that to remove the manual step.
 
-## 12. Things to do yourself
+## 13. Things to do yourself
 
 - Implement server-side product/amount validation (section 9).
 - Configure rate limiting / abuse control (section 10).
