@@ -52,10 +52,16 @@ The kit reads `itemId` to identify the payment request. It records
 2. **Read and persist the raw body first.** The full payload + selected headers
    are stored in `nicky_webhook_events` before any processing, so even rejected
    events are auditable.
-3. **Idempotency.** A `dedupe_key` is computed from
+3. **Idempotency with safe retry.** A `dedupe_key` is computed from
    `webHookId | webHookType | itemId | previousStatus | newStatus`. Insert is
-   protected by a unique constraint; a redelivery returns `200 { duplicate: true }`
-   without reprocessing.
+   protected by a unique constraint. On a redelivery the prior record is loaded:
+   - if it was **already processed successfully** (`processed = true`), the
+     function acks `200 { duplicate: true, alreadyProcessed: true }` without
+     redoing work;
+   - if a previous attempt did **not** finish successfully (`processed = false`,
+     e.g. the Nicky lookup errored), the function **reprocesses** it now rather
+     than silently acking — so a transient failure does not permanently lose the
+     event.
 4. **Source-IP validation.** The client IP must equal `NICKY_WEBHOOK_ALLOWED_IP`
    (default `20.76.240.81`). If not, the event is recorded and rejected with
    `403`.

@@ -15,6 +15,7 @@ import {
   type NickyPaymentRequest,
 } from "./nicky.ts";
 import { getShortIdFromResponse } from "./payment-identifiers.ts";
+import { buildReconcileUpdate } from "./reconcile-helpers.ts";
 
 export interface OrderLocator {
   orderId?: string;
@@ -36,6 +37,7 @@ interface OrderRow {
   nicky_payment_request_id: string | null;
   nicky_short_id: string | null;
   status: string;
+  paid_at: string | null;
 }
 
 async function findOrder(
@@ -44,7 +46,8 @@ async function findOrder(
 ): Promise<OrderRow | null> {
   let query = supabase
     .from("nicky_orders")
-    .select("id, nicky_payment_request_id, nicky_short_id, status");
+    // paid_at is included so we never overwrite the first-confirmed-paid time.
+    .select("id, nicky_payment_request_id, nicky_short_id, status, paid_at");
 
   if (locator.orderId) {
     query = query.eq("id", locator.orderId);
@@ -115,20 +118,15 @@ export async function reconcileOrder(
 
   // --- Update the order (if we have one) --------------------------------
   if (order) {
-    const update: Record<string, unknown> = {
-      status: localStatus,
-      last_remote_status: remoteStatus ?? null,
-    };
-    // Backfill linkage if it was missing.
-    if (!order.nicky_payment_request_id && resolvedRequestId) {
-      update.nicky_payment_request_id = resolvedRequestId;
-    }
-    if (!order.nicky_short_id && resolvedShortId) {
-      update.nicky_short_id = resolvedShortId;
-    }
-    if (localStatus === "paid") {
-      update.paid_at = new Date().toISOString();
-    }
+    // buildReconcileUpdate preserves paid_at: it is only set on the FIRST
+    // transition to `paid`, never overwritten on later reconciliations.
+    const update = buildReconcileUpdate({
+      localStatus,
+      remoteStatus,
+      order,
+      resolvedRequestId,
+      resolvedShortId,
+    });
 
     const { error } = await supabase.from("nicky_orders").update(update).eq("id", order.id);
     if (error) throw new Error(`Failed to update order: ${error.message}`);

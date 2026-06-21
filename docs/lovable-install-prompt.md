@@ -35,16 +35,19 @@ WHAT TO INSTALL:
    nicky_webhook_events, nicky_payment_status_checks, nicky_assets_cache, with
    RLS enabled and no permissive policies. Use the provided
    001_nicky_payment_kit.sql.
-2. Supabase Edge Functions (Deno) — create EXACTLY these four, no more:
-   - nicky-create-payment: validates input, reads NICKY_API_KEY from env, calls
+2. Supabase Edge Functions (Deno) — create EXACTLY these (four runtime + one
+   scheduled), no webhook-registration function:
+   - nicky-create-payment: validates input, reads NICKY_API_KEY from env. Use the
+     race-safe DB path (nicky_create_or_claim_order RPC) so concurrent calls with
+     the same idempotency key do NOT create duplicate Nicky requests: return the
+     existing payment URL if present; if another caller owns creation, return 409
+     "retry shortly"; otherwise create. Calls
      POST /api/public/PaymentRequestPublicApi/create on
-     https://api-public.pay.nicky.me, stores the order, returns { orderId,
-     paymentUrl, nickyShortId }. Read EXACTLY response.id (Payment Request UUID)
-     and response.bill.shortId; do NOT probe alternate field names. Build the
-     payment URL as https://pay.nicky.me/home?paymentId=<response.bill.shortId>.
+     https://api-public.pay.nicky.me. Read EXACTLY response.id (Payment Request
+     UUID) and response.bill.shortId; do NOT probe alternate field names. Build
+     the payment URL as https://pay.nicky.me/home?paymentId=<response.bill.shortId>.
      If response.id or response.bill.shortId is missing, mark the order failed,
-     store the raw response, and return a 502 — do not continue with a partial
-     state. Never return the API key.
+     store the raw response, and return 502. Never return the API key.
    - nicky-list-assets: reads accepted assets from GET /AcceptedAsset/get-for-user,
      normalizes them (id, assetName, isFiat, decimalPrecisionUI, assetChain,
      assetTicker), and caches them. Return a clear error on empty/invalid
@@ -52,10 +55,18 @@ WHAT TO INSTALL:
    - nicky-webhook: POST only; validate source IP 20.76.240.81 using ONLY the
      first x-forwarded-for entry; store the raw event idempotently; then RE-QUERY
      Nicky by itemId and only mark the order paid if Nicky returns Finished.
-     Acknowledge duplicates with 200. Deploy with verify_jwt = false.
+     Ack already-processed duplicates with 200; reprocess a duplicate whose prior
+     attempt failed. Deploy with verify_jwt = false.
    - nicky-sync-payment-status: accepts orderId / nickyPaymentRequestId /
      nickyShortId, re-queries Nicky, updates local status. Safe for the success
-     page and for scheduled reconciliation.
+     page and for scheduled reconciliation. paid_at is set once and never
+     overwritten.
+   - nicky-reconcile-open-orders: scheduled fallback that reconciles open orders
+     (creating_payment / waiting_payment / webhook_received / syncing_status /
+     validation_required) that have a Nicky id. Protect it with the
+     x-nicky-reconciliation-secret header (NICKY_RECONCILIATION_SECRET) and
+     verify_jwt = false; fail closed if the secret is unset. Never mark paid
+     except via a server-side Finished lookup. Do NOT register/delete webhooks.
 3. Frontend kit under src/nicky/: NickyPayButton, NickyAssetSelector,
    NickyPaymentStatus, useNickyPayment, useNickyAssets, types, and an index.
    The frontend loads assets via nicky-list-assets, lets the user pick the
@@ -75,9 +86,18 @@ Canceled->canceled. Never unlock on validation_required.
 ENV / SECRETS (Supabase secrets, not frontend):
 NICKY_API_KEY (required), NICKY_API_BASE_URL (default
 https://api-public.pay.nicky.me), NICKY_PAY_BASE_URL (default
-https://pay.nicky.me), NICKY_WEBHOOK_ALLOWED_IP (default 20.76.240.81).
+https://pay.nicky.me), NICKY_WEBHOOK_ALLOWED_IP (default 20.76.240.81),
+NICKY_RECONCILIATION_SECRET (required for the scheduled reconciliation function),
+NICKY_CREATE_RATE_LIMIT_PER_HOUR (optional, default 0 = disabled).
 There is NO WEBHOOK_CALLBACK_URL and NO NICKY_ASSETS_ENDPOINT variable.
 Frontend gets only the public Supabase functions URL and anon key.
+
+PRODUCTION RULES:
+- The consuming app MUST validate amount/product server-side before calling
+  nicky-create-payment (never trust the browser's amount/invoiceReference). Do
+  NOT add a demo product catalog to the kit.
+- Add rate limiting / abuse control (app auth + WAF/Cloudflare; optionally the
+  built-in soft cap).
 
 WEBHOOK REGISTRATION RULES:
 - Do NOT create a nicky-register-webhooks Edge Function.
@@ -90,9 +110,9 @@ WEBHOOK REGISTRATION RULES:
   is idempotent and only creates missing webhooks.
 
 AFTER INSTALLING, tell me (the user) to:
-1) set the NICKY_API_KEY secret,
-2) run the migration,
-3) deploy the four Edge Functions,
+1) set the NICKY_API_KEY secret (and NICKY_RECONCILIATION_SECRET),
+2) run the migration (includes the nicky_create_or_claim_order RPC),
+3) deploy the Edge Functions (four runtime + nicky-reconcile-open-orders),
 4) derive (or ask me for) the deployed webhook URL:
    https://<project-ref>.functions.supabase.co/nicky-webhook,
 5) run the one-time setup script:
@@ -102,7 +122,10 @@ AFTER INSTALLING, tell me (the user) to:
    NICKY_API_BASE_URL, and NICKY_WEBHOOK_URL — see scripts/.env.webhook.example),
 6) confirm that BOTH events (PaymentRequest_ReportAdded and
    PaymentRequest_StatusChanged) were either created or already existed,
-7) wire the frontend checkout UI using the provided components.
+7) schedule nicky-reconcile-open-orders (with the x-nicky-reconciliation-secret
+   header) every few minutes,
+8) run npm ci && npm run typecheck && npm test (CI) before deploying,
+9) wire the frontend checkout UI using the provided components.
 
 Confirm payment ONLY via a server-side Nicky lookup. Treat the success redirect
 and the webhook as signals, never as proof of payment.
@@ -112,7 +135,10 @@ and the webhook as signals, never as proof of payment.
 
 ## After Lovable finishes
 
-Follow the post-install steps in [`setup.md`](setup.md): set the secret, run the
-migration, deploy the four functions, run the one-time webhook registration
-script (`npm run nicky:register-webhooks` — see
-[`webhook-registration.md`](webhook-registration.md)), and wire the checkout UI.
+Follow the post-install steps in [`setup.md`](setup.md), then work through
+[`production-checklist.md`](production-checklist.md). In short: set the secrets,
+run the migration, deploy the functions (incl. `nicky-reconcile-open-orders`),
+run the one-time webhook registration script
+(`npm run nicky:register-webhooks` — see
+[`webhook-registration.md`](webhook-registration.md)), schedule reconciliation
+(see [`operations.md`](operations.md)), and wire the checkout UI.

@@ -96,6 +96,10 @@ as "pending"; only `paid` (i.e. Nicky `Finished`) unlocks anything.
 
 - `nicky-webhook`: `verify_jwt = false` (Nicky cannot send a Supabase JWT).
   Protected instead by IP validation + re-query.
+- `nicky-reconcile-open-orders`: `verify_jwt = false` so a scheduler can call it,
+  but it is **not** public — it requires the `x-nicky-reconciliation-secret`
+  header (`NICKY_RECONCILIATION_SECRET`) and **fails closed** if that secret is
+  unset.
 - `nicky-create-payment`, `nicky-list-assets`, `nicky-sync-payment-status`:
   `verify_jwt = true` — they require the Supabase anon key.
 
@@ -103,11 +107,60 @@ The plugin does **not** register, list, or delete webhooks at runtime, so there
 is no setup function to lock down. Webhooks are configured once, outside the
 plugin runtime (see `docs/webhooks.md`).
 
-## 9. Things to do yourself
+## 9. Server-side product/amount validation (consuming-app responsibility)
 
-- **Rate-limit** `nicky-create-payment` if your app is public (e.g. per-IP or
-  per-user) to avoid abuse creating many payment requests.
-- **Validate amounts/products server-side** against your own catalog — don't let
-  the client send an arbitrary `amountExpectedNative` for a fixed-price product.
-  Pass trusted values from your own backend logic / metadata.
+`nicky-create-payment` can create Payment Requests on the merchant's Nicky
+account, and it **trusts its caller** for `amountExpectedNative`,
+`invoiceReference`, `description`, and payer details. A public app must not let
+arbitrary users create arbitrary payments. Recommended patterns:
+
+- **Front it with your own logic.** Have the browser call *your* authenticated
+  endpoint (or an RLS-protected table/RPC) that computes the trusted amount from
+  your catalog, then calls `nicky-create-payment` with values you control.
+- **Validate `invoiceReference`** against an existing local order/product row;
+  refuse references that don't map to a known, unpaid order.
+- **Refuse client-supplied amounts** for fixed-price products — derive the amount
+  server-side; never accept it from the browser.
+- **Require authenticated user context** where possible, and put the user id in
+  `metadata` for traceability (never trust it for fulfillment by itself).
+
+The kit does not ship a product catalog (by design). These checks live in the
+consuming app.
+
+## 10. Rate limiting / abuse control
+
+Attackers can spam `nicky-create-payment`. In order of effectiveness:
+
+1. **App authentication** — require a logged-in user to create payments.
+2. **WAF / Cloudflare / Supabase platform rate limiting** in front of the
+   function — the most robust option.
+3. **Optional built-in soft cap** — set `NICKY_CREATE_RATE_LIMIT_PER_HOUR` > 0 to
+   cap orders per payer email per hour. This is **defense-in-depth only**: it is
+   keyed on payer email (which an attacker can vary) and is not a substitute for
+   (1) and (2). It is disabled by default to avoid security theater.
+
+## 11. Concurrency & data integrity
+
+- **Race-safe idempotency.** Order creation goes through the
+  `nicky_create_or_claim_order` SQL function, which does an atomic
+  `INSERT ... ON CONFLICT (idempotency_key) DO NOTHING` and then a conditional
+  claim. Only one concurrent caller "owns" creating the Nicky Payment Request;
+  others get a `409 retry shortly`. This prevents duplicate Nicky requests for
+  the same idempotency key. A stale claim (older than the window) can be
+  re-claimed so a failed attempt can be retried.
+- **`paid_at` is write-once.** Reconciliation sets `paid_at` only on the first
+  transition to `paid` and never overwrites it (see `_shared/reconcile-helpers.ts`).
+- **Partial-write recovery.** If the order saves but the normalized
+  `nicky_payment_requests` row fails to persist, the order is flagged
+  (`metadata.payment_request_row_missing`) and the row is repaired on the next
+  idempotent retry (non-clobbering upsert). See `docs/operations.md`.
+- **Webhook reprocessing.** A redelivered webhook that was previously recorded
+  but **not** successfully processed is reprocessed (re-queried against Nicky)
+  rather than silently acked, so transient failures don't lose events.
+
+## 12. Things to do yourself
+
+- Implement server-side product/amount validation (section 9).
+- Configure rate limiting / abuse control (section 10).
 - **Rotate** the Nicky API key periodically and on any suspected exposure.
+- Set a strong, random `NICKY_RECONCILIATION_SECRET`.

@@ -120,7 +120,38 @@ preflight. If you still see CORS errors, you're likely hitting the wrong URL
 
 ## Local order stuck in `creating_payment`
 
-The create call failed after inserting the local order but before linking it to
-Nicky. The row is intentionally retained for audit. Retry creation with the same
-idempotency key; once Nicky returns a short id, the order advances to
-`waiting_payment`.
+The create call failed after the order row was created but before it was linked
+to Nicky. The row is intentionally retained for audit, and `creation_claimed_at`
+gates retries. Retry creation with the same idempotency key after the stale
+window (~2 minutes); it re-claims and re-attempts. Once Nicky returns identifiers
+the order advances to `waiting_payment`.
+
+## `nicky-create-payment` returns 409 "creation already in progress"
+
+Two requests with the same idempotency key raced; one is creating the Nicky
+Payment Request and the others are told to **retry shortly**. This is the
+race-safety guard (`nicky_create_or_claim_order`) preventing duplicate Nicky
+requests. Simply retry the same call after a moment — it will return the existing
+payment URL once creation completes.
+
+## `nicky-create-payment` succeeds with a `warning` field
+
+The payment is usable (a `paymentUrl` is returned), but the normalized
+`nicky_payment_requests` row failed to persist. The order is flagged with
+`metadata.payment_request_row_missing`. Re-call `nicky-create-payment` with the
+same idempotency key to repair the row (idempotent path), or see
+[`operations.md`](operations.md).
+
+## Reconciliation function returns 401 / 503
+
+- **503 "not configured"** — `NICKY_RECONCILIATION_SECRET` is not set. Set it as
+  a Supabase secret and redeploy.
+- **401** — the `x-nicky-reconciliation-secret` header is missing or wrong. Send
+  the exact secret value.
+
+## `npm run typecheck:edge` can't run
+
+This requires the Deno CLI (and network access to fetch the Edge Functions'
+remote imports). If Deno isn't installed, install it (https://deno.land) or rely
+on CI, where the `edge` job runs it. The pure business logic is also covered by
+`npm test`, so a missing Deno locally does not block the Node checks.

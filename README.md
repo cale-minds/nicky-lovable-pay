@@ -72,11 +72,14 @@ never proof.
 ├── README.md
 ├── .env.example
 ├── package.json
+├── .github/workflows/ci.yml     # CI: typecheck + tests (+ Deno edge check)
 ├── docs/
 │   ├── setup.md                 # step-by-step setup
 │   ├── security.md              # the security model (read this)
 │   ├── webhooks.md              # webhook flow, IP validation, idempotency
 │   ├── webhook-registration.md  # one-time setup script for webhook registration
+│   ├── production-checklist.md  # pre-launch checklist
+│   ├── operations.md            # day-2 runbook
 │   ├── lovable-install-prompt.md# copy-paste prompt for Lovable
 │   └── troubleshooting.md
 ├── scripts/                     # SETUP-ONLY helpers (not runtime, not Edge Fns)
@@ -86,14 +89,16 @@ never proof.
 ├── supabase/
 │   ├── config.toml              # per-function verify_jwt settings
 │   ├── migrations/
-│   │   └── 001_nicky_payment_kit.sql
+│   │   └── 001_nicky_payment_kit.sql   # tables + nicky_create_or_claim_order RPC
 │   └── functions/
 │       ├── _shared/             # env, db, validation, Nicky client, reconcile,
-│       │                        # status, assets, payment-identifiers, webhook-ip
+│       │                        # status, assets, payment-identifiers, webhook-ip,
+│       │                        # reconcile-helpers, create-payment-helpers, …
 │       ├── nicky-create-payment/
 │       ├── nicky-list-assets/
 │       ├── nicky-webhook/
-│       └── nicky-sync-payment-status/
+│       ├── nicky-sync-payment-status/
+│       └── nicky-reconcile-open-orders/  # scheduled fallback (secret-protected)
 └── src/
     └── nicky/                   # React kit (components, hooks, types)
         ├── index.ts
@@ -144,14 +149,21 @@ supabase db push
 
 ### 5. Deploy the Edge Functions
 
-The plugin ships exactly four functions:
+The plugin ships four runtime functions plus an optional scheduled-reconciliation
+function:
 
 ```bash
 supabase functions deploy nicky-create-payment
 supabase functions deploy nicky-list-assets
 supabase functions deploy nicky-sync-payment-status
-supabase functions deploy nicky-webhook            # verify_jwt = false
+supabase functions deploy nicky-webhook                  # verify_jwt = false
+supabase functions deploy nicky-reconcile-open-orders    # verify_jwt = false, secret-protected
 ```
+
+`nicky-reconcile-open-orders` is an operational fallback for missed/delayed
+webhooks and abandoned redirects. It is **not** publicly callable: set
+`NICKY_RECONCILIATION_SECRET` and invoke it with the
+`x-nicky-reconciliation-secret` header (see [`docs/operations.md`](docs/operations.md)).
 
 ### 6. Register the webhook once (setup script — not a runtime function)
 
@@ -177,6 +189,31 @@ is fixed and owned by the kit — arbitrary callback URLs are rejected.
 See [`docs/webhook-registration.md`](docs/webhook-registration.md) for details,
 and [`scripts/.env.webhook.example`](scripts/.env.webhook.example) for the
 setup-only variables.
+
+### 7. Schedule reconciliation (recommended)
+
+Set `NICKY_RECONCILIATION_SECRET` and schedule `nicky-reconcile-open-orders` to
+run every few minutes (Supabase cron / `pg_cron` + `pg_net`, or any external
+scheduler) so missed webhooks and abandoned redirects are still reconciled. See
+[`docs/operations.md`](docs/operations.md).
+
+### Before deploying: run CI locally
+
+```bash
+npm ci
+npm run typecheck      # pure modules + frontend kit (tsc)
+npm test               # vitest unit tests
+npm run typecheck:edge # Deno check of Edge Function entrypoints (needs Deno + network)
+```
+
+CI runs the same checks on every push/PR (`.github/workflows/ci.yml`). Work
+through [`docs/production-checklist.md`](docs/production-checklist.md) before
+going live.
+
+> **Production: validate amounts server-side.** `nicky-create-payment` trusts its
+> caller for the amount and references. A public app **must** validate these
+> against its own catalog/orders (and ideally require an authenticated user)
+> before calling it — see [`docs/security.md`](docs/security.md).
 
 ---
 
@@ -285,6 +322,8 @@ periodic `nicky-sync-payment-status` move it to `paid` once Nicky returns
 | `NICKY_API_BASE_URL`        | Secret/env   | `https://api-public.pay.nicky.me`  | Nicky public API base.                 |
 | `NICKY_PAY_BASE_URL`        | Secret/env   | `https://pay.nicky.me`             | Used to build payer redirect URL.      |
 | `NICKY_WEBHOOK_ALLOWED_IP`  | Secret/env   | `20.76.240.81`                     | Webhook source-IP allow list.          |
+| `NICKY_RECONCILIATION_SECRET` | Secret     | —                                  | Required for the scheduled reconciliation function. |
+| `NICKY_CREATE_RATE_LIMIT_PER_HOUR` | Secret/env | `0` (disabled)                | Optional soft per-payer-email create cap. |
 | `SUPABASE_URL`              | Auto         | —                                  | Injected by Supabase.                  |
 | `SUPABASE_SERVICE_ROLE_KEY` | Auto         | —                                  | Injected by Supabase. Server-only.     |
 | `VITE_SUPABASE_FUNCTIONS_URL` | Frontend   | —                                  | Public. Functions base URL.            |

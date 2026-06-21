@@ -99,7 +99,16 @@ create table if not exists nicky_orders (
   metadata                  jsonb not null default '{}'::jsonb,
 
   -- Timestamp the order was confirmed paid (server-side Finished only).
+  -- Set exactly ONCE, on the first transition to `paid`; never overwritten on
+  -- subsequent reconciliations (see _shared/reconcile-helpers.ts).
   paid_at                   timestamptz,
+
+  -- Concurrency guard for create-payment. A non-null, recent value means some
+  -- invocation currently "owns" creating the Nicky Payment Request for this
+  -- idempotency key. A stale value (older than the claim window) can be
+  -- re-claimed so a previously-failed attempt can be retried. See the
+  -- nicky_create_or_claim_order() function below.
+  creation_claimed_at       timestamptz,
 
   created_at                timestamptz not null default now(),
   updated_at                timestamptz not null default now()
@@ -242,6 +251,92 @@ create table if not exists nicky_assets_cache (
   -- Cache is considered stale after expires_at.
   expires_at      timestamptz not null default (now() + interval '1 hour')
 );
+
+-- -----------------------------------------------------------------------------
+-- nicky_create_or_claim_order()
+-- Race-safe "create-or-claim" for the create-payment Edge Function.
+--
+-- Concurrency problem this solves: two simultaneous create-payment calls with
+-- the same idempotency key could both see "no existing order", both insert, and
+-- both call Nicky — creating duplicate Payment Requests. This function makes the
+-- decision atomic in the database:
+--
+--   1. INSERT ... ON CONFLICT (idempotency_key) DO NOTHING  (atomic de-dupe).
+--   2. If the row already has a payment_url -> idempotent hit; return it with
+--      claimed = false (caller just returns the existing URL).
+--   3. Otherwise try to CLAIM creation with a conditional UPDATE that only
+--      succeeds when creation_claimed_at is NULL or older than the stale window.
+--      Exactly one concurrent caller wins the claim (claimed = true) and may
+--      call Nicky; the others get claimed = false and should ask the caller to
+--      retry shortly.
+--
+-- The stale window lets a previously-failed creation be retried later without
+-- permanently locking the idempotency key, while still preventing parallel
+-- Nicky Payment Requests for the same key.
+-- -----------------------------------------------------------------------------
+create or replace function nicky_create_or_claim_order(
+  p_idempotency_key    text,
+  p_invoice_reference  text,
+  p_description        text,
+  p_amount             numeric,
+  p_asset_id           text,
+  p_payer_email        text,
+  p_payer_name         text,
+  p_metadata           jsonb default '{}'::jsonb,
+  p_claim_stale_seconds int default 120
+)
+returns table (
+  order_id                 uuid,
+  status                   nicky_local_status,
+  payment_url              text,
+  nicky_payment_request_id text,
+  nicky_short_id           text,
+  claimed                  boolean
+)
+language plpgsql
+as $$
+declare
+  v_row nicky_orders;
+begin
+  -- 1. Atomic insert-or-ignore on the unique idempotency key.
+  insert into nicky_orders (
+    idempotency_key, invoice_reference, description, amount_expected_native,
+    blockchain_asset_id, payer_email, payer_name, status, metadata
+  ) values (
+    p_idempotency_key, p_invoice_reference, p_description, p_amount,
+    p_asset_id, p_payer_email, p_payer_name, 'creating_payment',
+    coalesce(p_metadata, '{}'::jsonb)
+  )
+  on conflict (idempotency_key) do nothing;
+
+  select * into v_row from nicky_orders where idempotency_key = p_idempotency_key;
+
+  -- 2. Already created: return idempotently, no claim needed.
+  if v_row.payment_url is not null then
+    return query select v_row.id, v_row.status, v_row.payment_url,
+      v_row.nicky_payment_request_id, v_row.nicky_short_id, false;
+    return;
+  end if;
+
+  -- 3. Try to claim creation (unclaimed or stale claim only).
+  update nicky_orders
+     set creation_claimed_at = now()
+   where id = v_row.id
+     and (creation_claimed_at is null
+          or creation_claimed_at < now() - make_interval(secs => p_claim_stale_seconds))
+  returning * into v_row;
+
+  if found then
+    return query select v_row.id, v_row.status, v_row.payment_url,
+      v_row.nicky_payment_request_id, v_row.nicky_short_id, true;
+  else
+    -- Someone else holds an active claim; report not-claimed.
+    select * into v_row from nicky_orders where idempotency_key = p_idempotency_key;
+    return query select v_row.id, v_row.status, v_row.payment_url,
+      v_row.nicky_payment_request_id, v_row.nicky_short_id, false;
+  end if;
+end;
+$$;
 
 -- -----------------------------------------------------------------------------
 -- Row Level Security

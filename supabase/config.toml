@@ -7,6 +7,10 @@
 #   * nicky-webhook MUST have verify_jwt = false — Nicky calls it server-to-
 #     server and cannot present a Supabase JWT. Security is enforced instead by
 #     source-IP validation + a mandatory server-side re-query (see the code).
+#   * nicky-reconcile-open-orders has verify_jwt = false so a scheduler/cron can
+#     call it. It is NOT public: it requires the shared secret header
+#     `x-nicky-reconciliation-secret` (NICKY_RECONCILIATION_SECRET) and fails
+#     closed if that secret is unset.
 #   * The frontend-facing functions keep verify_jwt = true so the Supabase anon
 #     key (sent by the React kit) is required.
 #
@@ -25,4 +29,7 @@ verify_jwt = true
 verify_jwt = true
 
 [functions.nicky-webhook]
+verify_jwt = false
+
+[functions.nicky-reconcile-open-orders]
 verify_jwt = false
