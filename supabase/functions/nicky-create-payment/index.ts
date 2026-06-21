@@ -44,11 +44,44 @@ import {
 import {
   isOverRateLimit,
   decideClaimAction,
+  mergeMetadata,
+  PERSIST_FAILURE_MESSAGE,
+  buildPersistFailureBody,
   type ClaimOutcome,
 } from "../_shared/create-payment-helpers.ts";
 
 // deno-lint-ignore no-explicit-any
 type AnySupabase = any;
+
+/**
+ * Best-effort: merge an operational `patch` into nicky_orders.metadata WITHOUT
+ * clobbering existing (app-specific) metadata. Reads the current metadata first,
+ * then writes the merged object. Errors are logged, never thrown — callers use
+ * this for operator-recovery flags and must not depend on it succeeding.
+ */
+async function mergeOrderMetadata(
+  supabase: AnySupabase,
+  orderId: string,
+  patch: Record<string, unknown>,
+): Promise<void> {
+  const { data, error: readErr } = await supabase
+    .from("nicky_orders")
+    .select("metadata")
+    .eq("id", orderId)
+    .maybeSingle();
+  if (readErr) {
+    console.error("mergeOrderMetadata: failed to read existing metadata", readErr.message);
+    return;
+  }
+  const merged = mergeMetadata(data?.metadata as Record<string, unknown> | null, patch);
+  const { error: writeErr } = await supabase
+    .from("nicky_orders")
+    .update({ metadata: merged })
+    .eq("id", orderId);
+  if (writeErr) {
+    console.error("mergeOrderMetadata: failed to write merged metadata", writeErr.message);
+  }
+}
 
 /**
  * Upserts the normalized nicky_payment_requests row.
@@ -187,13 +220,12 @@ Deno.serve(async (req) => {
       // A previous attempt called Nicky but never persisted linkage, so we
       // cannot tell whether a Nicky Payment Request already exists. Auto-creating
       // again risks a duplicate. Require operator review (see docs/operations.md).
-      await supabase
-        .from("nicky_orders")
-        .update({
-          status: "failed",
-          metadata: { ...metadata, needs_operator_review: true, review_reason: "nicky_create_attempted_no_linkage" },
-        })
-        .eq("id", orderId);
+      await supabase.from("nicky_orders").update({ status: "failed" }).eq("id", orderId);
+      // Merge flags into EXISTING metadata so app-specific keys aren't clobbered.
+      await mergeOrderMetadata(supabase, orderId, {
+        needs_operator_review: true,
+        review_reason: "nicky_create_attempted_no_linkage",
+      });
       return errorResponse(
         "This payment needs manual review before it can be retried. A previous " +
           "creation attempt may have reached Nicky without being linked locally.",
@@ -314,11 +346,31 @@ Deno.serve(async (req) => {
       .eq("id", orderId);
 
     if (updErr) {
-      console.error("failed to update order after Nicky create", updErr.message);
-      return errorResponse("Payment created at Nicky but failed to persist locally.", 500, {
-        paymentUrl,
-        nickyShortId: shortId,
+      // Nicky created the Payment Request, but we failed to persist the linkage
+      // locally. We must NOT hand the browser a usable payment URL for a request
+      // the local system cannot reconcile automatically — otherwise a payer could
+      // pay an orphaned request. Log the identifiers server-side for operator
+      // recovery and best-effort flag the order for review, then return a safe
+      // 500 with NO payment identifiers.
+      console.error(
+        "failed to update order after Nicky create",
+        updErr.message,
+        "orphaned nicky identifiers (for recovery):",
+        JSON.stringify({
+          orderId,
+          nicky_payment_request_id: paymentRequestId,
+          nicky_short_id: shortId,
+          payment_url: paymentUrl,
+        }),
+      );
+      await mergeOrderMetadata(supabase, orderId, {
+        needs_operator_review: true,
+        review_reason: "nicky_created_local_persist_failed",
+        possible_orphaned_nicky_payment_request_id: paymentRequestId,
+        possible_orphaned_nicky_short_id: shortId,
+        possible_orphaned_payment_url: paymentUrl,
       });
+      return errorResponse(PERSIST_FAILURE_MESSAGE, 500, buildPersistFailureBody(orderId));
     }
 
     // Persist the normalized payment-request row.
@@ -343,10 +395,8 @@ Deno.serve(async (req) => {
       // payment, we flag the inconsistency and succeed with a warning. An
       // idempotent retry (or operator) will repair the row via repairOnly upsert.
       console.error("failed to persist nicky_payment_requests row", prRowError.message);
-      await supabase
-        .from("nicky_orders")
-        .update({ metadata: { ...metadata, payment_request_row_missing: true } })
-        .eq("id", orderId);
+      // Merge into existing metadata (don't clobber app-specific keys).
+      await mergeOrderMetadata(supabase, orderId, { payment_request_row_missing: true });
 
       return json({
         orderId,

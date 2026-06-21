@@ -188,6 +188,81 @@ call, a transient error that happened before Nicky created anything still lands
 here and needs the manual check above. This is the safe trade-off given Nicky has
 no idempotent-create / lookup-by-invoice-reference in the current API.
 
+### "Payment was created at Nicky but failed to persist locally"
+
+`nicky-create-payment` returned `500` with
+`{ orderId, retryable: false, needsReview: true }` and **no** payment URL. This
+means Nicky created the Payment Request but the local `nicky_orders` write then
+failed, so the linkage was never stored.
+
+**The client deliberately receives no `paymentUrl` / `nickyShortId` /
+`nickyPaymentRequestId`** in this path — paying an orphaned request the local app
+can't reconcile would be worse than failing. The order is best-effort flagged:
+
+- `metadata.needs_operator_review = true`
+- `metadata.review_reason = "nicky_created_local_persist_failed"`
+- `metadata.possible_orphaned_nicky_payment_request_id`
+- `metadata.possible_orphaned_nicky_short_id`
+- `metadata.possible_orphaned_payment_url`
+
+(If even that metadata write failed, the flags may be absent — fall back to the
+Edge Function logs, which always log the identifiers.)
+
+Recover manually:
+
+1. Inspect the order:
+
+   ```sql
+   select id, invoice_reference, payer_email, status, created_at,
+          nicky_payment_request_id, nicky_short_id, nicky_create_attempted_at,
+          creation_claimed_at, metadata
+   from nicky_orders where id = '<order-uuid>';
+   ```
+
+2. If the `possible_orphaned_*` metadata is missing, find the identifiers in the
+   Edge Function logs:
+
+   ```bash
+   supabase functions logs nicky-create-payment
+   # look for: "orphaned nicky identifiers (for recovery): {...}"
+   ```
+
+3. Check the **Nicky dashboard** for a Payment Request matching this order
+   (invoice reference / timestamp / payer details).
+
+4a. **If a Nicky Payment Request exists**, link it and let reconciliation continue:
+
+    ```sql
+    update nicky_orders
+       set nicky_payment_request_id = '<request-uuid>',
+           nicky_short_id           = '<short-id>',
+           payment_url              = 'https://pay.nicky.me/home?paymentId=<short-id>',
+           status                   = 'waiting_payment',
+           creation_claimed_at      = null,
+           metadata                 = metadata
+                                       - 'needs_operator_review' - 'review_reason'
+                                       - 'possible_orphaned_nicky_payment_request_id'
+                                       - 'possible_orphaned_nicky_short_id'
+                                       - 'possible_orphaned_payment_url'
+     where id = '<order-uuid>';
+    ```
+
+4b. **If no Nicky Payment Request exists**, allow a clean new attempt:
+
+    ```sql
+    update nicky_orders
+       set nicky_create_attempted_at = null,
+           creation_claimed_at        = null,
+           status                     = 'creating_payment',
+           metadata                   = metadata
+                                         - 'needs_operator_review' - 'review_reason'
+                                         - 'possible_orphaned_nicky_payment_request_id'
+                                         - 'possible_orphaned_nicky_short_id'
+                                         - 'possible_orphaned_payment_url'
+     where id = '<order-uuid>';
+    ```
+    Then re-call `nicky-create-payment` with the same idempotency key.
+
 ## Logs to collect before escalating to Nicky support
 
 - The `nicky_orders` row (id, status, `nicky_payment_request_id`, `nicky_short_id`,
