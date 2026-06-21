@@ -93,7 +93,7 @@ calls will be rejected with 401, because they carry no Supabase JWT).
 > there is no `nicky-register-webhooks` function and no `WEBHOOK_CALLBACK_URL`
 > secret.
 
-## 7. Configure the webhook in Nicky (once, outside the plugin)
+## 7. Register the webhook once (setup script)
 
 The callback URL is only known **after** deployment and is fixed:
 
@@ -101,15 +101,29 @@ The callback URL is only known **after** deployment and is fixed:
 https://<project-ref>.functions.supabase.co/nicky-webhook
 ```
 
-Configure it **once** in Nicky — manually in the Nicky dashboard, or via the
-Lovable setup prompt — registering it for both required events:
+Register it **once** using the included setup script (Node 18+, no
+dependencies). This is a one-time setup step — **not** an Edge Function and
+**not** part of the runtime:
+
+```bash
+NICKY_API_KEY=your_key \
+NICKY_WEBHOOK_URL=https://<project-ref>.functions.supabase.co/nicky-webhook \
+  npm run nicky:register-webhooks
+```
+
+The script is **idempotent**: it lists existing webhooks and creates only the
+missing ones for both required events:
 
 - `PaymentRequest_ReportAdded`
 - `PaymentRequest_StatusChanged`
 
-Do not use arbitrary callback URLs; the route is fixed and owned by the kit.
-This is a one-time configuration step, not something the plugin performs in
-production. See `docs/webhooks.md` for details.
+It never deletes or updates webhooks, never exposes the API key, and rejects any
+URL that isn't the fixed `/nicky-webhook` route. Run it from a trusted local /
+setup environment. Add `--dry-run` to validate inputs without calling Nicky.
+
+See `docs/webhook-registration.md` and `scripts/.env.webhook.example` for
+details. The plugin itself never registers/updates/deletes webhooks in
+production — it only processes them.
 
 ## 8. Wire up the frontend
 

@@ -89,20 +89,28 @@ If your deployment sits behind a different/known proxy, set
 
 ## Configuring the webhook (once, outside the plugin)
 
-The plugin does **not** register webhooks. Configure it once, after deploying
-the functions (the callback URL is only known then):
+The plugin does **not** register webhooks at runtime. Register it **once**,
+after deploying the functions (the callback URL is only known then), using the
+included setup script:
 
-1. Copy the fixed callback URL:
-   `https://<project-ref>.functions.supabase.co/nicky-webhook`
-2. In the Nicky dashboard (or via the Lovable setup prompt), register that URL
-   for both events:
-   - `PaymentRequest_ReportAdded`
-   - `PaymentRequest_StatusChanged`
-3. Do not use any other URL — the route is fixed and owned by the kit.
+```bash
+NICKY_API_KEY=your_key \
+NICKY_WEBHOOK_URL=https://<project-ref>.functions.supabase.co/nicky-webhook \
+  npm run nicky:register-webhooks
+```
 
-There is no `nicky-register-webhooks` function and no `WEBHOOK_CALLBACK_URL`
-secret in this plugin. Webhook lifecycle management (create/list/delete) is
-intentionally out of the plugin's production runtime.
+The script (`scripts/register-nicky-webhooks.mjs`) lists existing webhooks and
+idempotently creates only the missing ones for both events
+(`PaymentRequest_ReportAdded`, `PaymentRequest_StatusChanged`) at the fixed URL.
+It is a one-time **setup** helper — not a deployed Edge Function. It never
+deletes/updates webhooks, never exposes the API key, and rejects any URL that
+isn't the fixed `/nicky-webhook` route. Full details:
+[`webhook-registration.md`](webhook-registration.md).
+
+There is no `nicky-register-webhooks` Edge Function and no `WEBHOOK_CALLBACK_URL`
+runtime secret in this plugin. Webhook lifecycle management (create/list/delete)
+is intentionally out of the plugin's production runtime; the setup-only variable
+the script reads is `NICKY_WEBHOOK_URL`.
 
 ## Don't rely on webhooks alone
 

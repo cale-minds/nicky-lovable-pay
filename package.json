@@ -16,13 +16,15 @@
   "files": [
     "src/nicky",
     "supabase",
+    "scripts",
     "docs",
     "README.md"
   ],
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "nicky:register-webhooks": "node scripts/register-nicky-webhooks.mjs"
   },
   "peerDependencies": {
     "react": ">=18"
