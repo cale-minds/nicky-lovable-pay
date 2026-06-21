@@ -29,12 +29,14 @@ Work through this before taking the Nicky payment kit live. It complements
 - [ ] `nicky-webhook` (verify_jwt = **false**)
 - [ ] `nicky-reconcile-open-orders` (verify_jwt = **false**, protected by the secret header)
 
-## Webhook (configured once, outside the runtime)
+## Webhook (configured once, manually — no script)
 
-- [ ] Webhook registered **once** in Nicky (via `npm run nicky:register-webhooks`
-      or the Lovable setup flow). The plugin does **not** register webhooks at runtime.
-- [ ] Callback URL: `https://<project-ref>.functions.supabase.co/nicky-webhook`
-- [ ] Registered for both events:
+- [ ] Webhook configured **once** in Nicky (via the Lovable setup prompt or
+      manually in the Nicky dashboard). The plugin does **not** register webhooks
+      at runtime and ships **no** local registration script.
+- [ ] Callback URL is exactly `https://<project-ref>.functions.supabase.co/nicky-webhook`
+      (no arbitrary URL).
+- [ ] Configured for both events:
   - [ ] `PaymentRequest_ReportAdded`
   - [ ] `PaymentRequest_StatusChanged`
 
@@ -52,8 +54,10 @@ Work through this before taking the Nicky payment kit live. It complements
 - [ ] `npm ci` succeeds.
 - [ ] `npm run typecheck` passes.
 - [ ] `npm test` passes.
-- [ ] `npm run typecheck:edge` (Deno) passes, **or** the limitation is documented
-      (Deno may need network to fetch remote imports).
+- [ ] `npm run typecheck:edge` (Deno) passes. This CI job is **blocking** (not
+      advisory). It needs the Deno CLI and network access to fetch the Edge
+      Functions' remote (`esm.sh`) imports; on a transient registry outage, re-run
+      the job rather than disabling it.
 
 ## End-to-end verification
 

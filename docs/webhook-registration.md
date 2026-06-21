@@ -1,116 +1,61 @@
-# Webhook Registration (one-time setup)
+# Webhook Setup (one-time, manual)
 
-Registering the Nicky webhook is a **one-time setup operation**, performed during
-installation — **not** something the plugin does at runtime.
+Configuring the Nicky webhook is a **one-time setup operation**, performed during
+installation — **not** something the plugin does at runtime, and **not** via any
+script shipped in this repository.
 
 > **Runtime vs. setup**
 > - **Runtime plugin behavior:** the `nicky-webhook` Edge Function only
 >   **processes** incoming webhooks. It never registers, lists, updates, or
 >   deletes them.
-> - **Setup behavior:** you register the webhook **once** using the helper script
->   below (or the Lovable/Claude setup flow), from a trusted local/setup
->   environment.
+> - **Setup behavior:** you configure the webhook **once** in Nicky — either by
+>   following the Lovable setup/install prompt (see
+>   [`lovable-install-prompt.md`](lovable-install-prompt.md)) or manually in the
+>   Nicky dashboard.
 
-There is intentionally **no** `nicky-register-webhooks` Edge Function and **no**
-runtime webhook-registration code.
+There is intentionally **no** `nicky-register-webhooks` Edge Function, **no**
+runtime webhook-registration code, and **no** local script that calls Nicky's
+webhook setup endpoints. The plugin does not create, list, update, or delete
+webhooks.
 
 ---
 
 ## The fixed callback URL
 
-The callback URL is fixed and owned by the kit:
+The callback URL is fixed and owned by the kit. Use exactly this — never an
+arbitrary URL:
 
 ```
 https://<project-ref>.functions.supabase.co/nicky-webhook
 ```
 
-End users do **not** choose arbitrary callback URLs. The setup script even
-enforces that the URL is HTTPS and ends with `/nicky-webhook`.
+It is only known **after** you deploy the Supabase Edge Functions, so configure
+the webhook after deployment.
 
 ## Required events
 
-The script registers the URL for exactly these two Nicky events:
+Register the callback URL for exactly these two Nicky events:
 
 - `PaymentRequest_ReportAdded`
 - `PaymentRequest_StatusChanged`
 
-## Prerequisites
+## How to configure it
 
-Run the script **after** deploying the Supabase Edge Functions — the project
-ref / function URL must already exist, otherwise you cannot know the callback
-URL.
+Configure the webhook **once**, after deploying the Edge Functions, using
+whichever Nicky-provided mechanism your account exposes (the Nicky dashboard or
+Nicky's own API/console). The Lovable setup prompt will walk a user through this
+step. Point both required events at the fixed callback URL above.
 
-You also need Node 18+ (the script uses built-in `fetch` and has no
-dependencies).
+The plugin then simply **processes** the deliveries it receives:
 
-## Environment variables (setup-only)
+- POST only.
+- Source IP validated against `NICKY_WEBHOOK_ALLOWED_IP` (default
+  `20.76.240.81`), using only the first `x-forwarded-for` entry.
+- The raw event is stored for audit, then Nicky is **re-queried server-side**;
+  an order only becomes `paid` when that lookup returns `Finished`.
 
-These are consumed **only** by the script. They are **not** Edge Function
-secrets and **not** runtime plugin config. See
-[`scripts/.env.webhook.example`](../scripts/.env.webhook.example).
+## Verifying
 
-| Variable             | Required | Default                            | Notes                                            |
-| -------------------- | -------- | ---------------------------------- | ------------------------------------------------ |
-| `NICKY_API_KEY`      | Yes      | —                                  | Used only by this script. Never printed in full. |
-| `NICKY_API_BASE_URL` | No       | `https://api-public.pay.nicky.me`  | Nicky public API base URL.                       |
-| `NICKY_WEBHOOK_URL`  | Yes      | —                                  | Fixed callback URL; HTTPS, ends `/nicky-webhook`.|
-
-> **Do not** reintroduce `WEBHOOK_CALLBACK_URL` as a runtime variable — it does
-> not exist in this plugin. The setup-only variable is `NICKY_WEBHOOK_URL`.
-
-## Running it
-
-```bash
-NICKY_API_KEY=your_key \
-NICKY_WEBHOOK_URL=https://<project-ref>.functions.supabase.co/nicky-webhook \
-  npm run nicky:register-webhooks
-```
-
-Validate inputs without making any network calls:
-
-```bash
-NICKY_API_KEY=your_key \
-NICKY_WEBHOOK_URL=https://<project-ref>.functions.supabase.co/nicky-webhook \
-  node scripts/register-nicky-webhooks.mjs --dry-run
-```
-
-## What it does (idempotent)
-
-1. `GET /api/public/WebHookApi/list` — fetch existing webhooks.
-2. For each required event, check whether a webhook already exists for **that
-   event type AND this URL**.
-   - **Exists** → leave it untouched (no-op), print that it already exists.
-   - **Missing** → create it via `POST /api/public/WebHookApi/create` with body
-     `{ "webHookType": "<event>", "url": "<NICKY_WEBHOOK_URL>" }`.
-
-Running it multiple times never creates duplicates. A webhook with the same
-event type but a **different** URL is left alone — the script will create one for
-your URL and will **not** delete or update the other.
-
-### Fails safely on an unexpected list response
-
-The list response is parsed **strictly**. The only shapes accepted are a bare
-array, `{ items: [...] }`, or `{ data: [...] }` (an empty list of any of those is
-fine and simply means "no webhooks yet"). If Nicky's list endpoint returns any
-other shape — `null`, a primitive, `{}` with no recognized array, or an
-`items`/`data` field that isn't an array — the script **stops with a clear error
-and a non-zero exit code, and creates nothing.**
-
-This is deliberate: silently treating an unrecognized response as an empty list
-could make the script create **duplicate** webhooks. If you hit this error,
-inspect the raw list response, then re-run once the shape is recognized.
-
-The script **never**:
-
-- deletes webhooks,
-- updates existing webhooks,
-- accepts arbitrary runtime callback URLs,
-- creates an Edge Function,
-- writes anything to Supabase.
-
-## Security
-
-- The Nicky API key is used only locally by the script to call Nicky directly.
-  It is **never** exposed to the browser and **never** printed in full (the
-  script logs only a masked prefix and the key length).
-- Run the script from a **trusted local or setup environment** only.
+After configuring the webhook, trigger a test payment and confirm a row appears
+in `nicky_webhook_events` with `processing_status = 'processed'`. See
+[`operations.md`](operations.md) and [`troubleshooting.md`](troubleshooting.md).

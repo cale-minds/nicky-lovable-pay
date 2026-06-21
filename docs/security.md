@@ -147,16 +147,47 @@ Attackers can spam `nicky-create-payment`. In order of effectiveness:
   claim. Only one concurrent caller "owns" creating the Nicky Payment Request;
   others get a `409 retry shortly`. This prevents duplicate Nicky requests for
   the same idempotency key. A stale claim (older than the window) can be
-  re-claimed so a failed attempt can be retried.
+  re-claimed so a failed attempt can be retried — but only when the Nicky create
+  call was never attempted (see the next point).
 - **`paid_at` is write-once.** Reconciliation sets `paid_at` only on the first
   transition to `paid` and never overwrites it (see `_shared/reconcile-helpers.ts`).
 - **Partial-write recovery.** If the order saves but the normalized
   `nicky_payment_requests` row fails to persist, the order is flagged
   (`metadata.payment_request_row_missing`) and the row is repaired on the next
   idempotent retry (non-clobbering upsert). See `docs/operations.md`.
-- **Webhook reprocessing.** A redelivered webhook that was previously recorded
-  but **not** successfully processed is reprocessed (re-queried against Nicky)
-  rather than silently acked, so transient failures don't lose events.
+- **Webhook reprocessing & dedupe poisoning.** Each webhook event carries a
+  `processing_status`; only `processed` counts as success. An unauthorized
+  delivery is stored as `rejected` (never `processed`), so it cannot block a
+  later authorized delivery with the same dedupe key from being processed. A
+  prior `rejected` / `failed_retryable` / `received` event is reprocessed when a
+  later **authorized** request arrives.
+
+## 12. External-call / DB-write consistency (known limitation)
+
+`nicky-create-payment` performs an external call (create the Nicky Payment
+Request) and then a local DB write (store `id` / `bill.shortId`). These two steps
+are **not atomic across systems**: if the Nicky call succeeds but the local write
+fails, the local DB does not learn the Nicky Payment Request id/short id.
+
+Nicky's public API (as used by this kit) has **no documented idempotent-create
+key and no lookup-by-invoice-reference**, so we cannot reliably ask Nicky "did
+you already create a request for this order?". We therefore mitigate
+conservatively rather than risk a **duplicate** Payment Request:
+
+- The order is marked `nicky_create_attempted_at` **before** the Nicky call.
+- If a later (stale-claim) retry finds `nicky_create_attempted_at` set but no
+  linkage, `nicky_create_or_claim_order` returns `needs_review = true`; the
+  function refuses to auto-create again, flags
+  `metadata.needs_operator_review = true`, and returns `409` (non-retryable).
+- An operator resolves it manually (see `docs/operations.md`): check the Nicky
+  dashboard by invoice reference, then either link the existing request id or
+  clear the flag to allow a fresh attempt.
+
+**Known limitation / TODO:** this is intentionally conservative — a transient
+network error that occurred *before* Nicky created anything will still require
+manual review (we cannot distinguish "failed before the call reached Nicky" from
+"succeeded but local write failed"). If Nicky later exposes an idempotent-create
+header or lookup-by-invoice-reference, prefer that to remove the manual step.
 
 ## 12. Things to do yourself
 

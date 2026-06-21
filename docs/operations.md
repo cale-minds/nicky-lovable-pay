@@ -128,8 +128,65 @@ select * from nicky_payment_requests where order_id = '<order-uuid>';
 
 A creation attempt was interrupted. The `creation_claimed_at` column gates
 retries: after the stale window (~2 minutes) a retry with the same idempotency
-key can re-claim and re-attempt. If it never progresses, inspect
+key can re-claim and re-attempt — **but only if `nicky_create_attempted_at` is
+NULL** (the Nicky call was never made). If it never progresses, inspect
 `nicky_create_response` and the function logs.
+
+### Order flagged `needs_operator_review` (possible orphaned Nicky request)
+
+This is the **external-call / DB-write consistency** safeguard (see
+`docs/security.md`). It means: a previous attempt set `nicky_create_attempted_at`
+(we were about to call, or did call, Nicky) but no `nicky_payment_request_id` was
+ever stored, and a stale retry then refused to auto-create again to avoid a
+**duplicate** Nicky Payment Request. The order has
+`metadata.needs_operator_review = true` and create-payment returns `409`
+(non-retryable).
+
+Resolve it manually:
+
+1. Look the order up locally:
+
+   ```sql
+   select id, invoice_reference, status, nicky_payment_request_id,
+          nicky_create_attempted_at, creation_claimed_at, metadata
+   from nicky_orders where id = '<order-uuid>';
+   ```
+
+2. Check the **Nicky dashboard** for a Payment Request matching this order's
+   `invoice_reference` (Nicky's API has no lookup-by-invoice-reference, so this
+   step is manual).
+
+3a. **If a Nicky Payment Request exists**, link it and let normal reconciliation
+    take over:
+
+    ```sql
+    update nicky_orders
+       set nicky_payment_request_id = '<request-uuid-from-nicky>',
+           nicky_short_id           = '<short-id-from-nicky>',
+           payment_url              = 'https://pay.nicky.me/home?paymentId=<short-id>',
+           status                   = 'waiting_payment',
+           creation_claimed_at      = null,
+           metadata                 = metadata - 'needs_operator_review' - 'review_reason'
+     where id = '<order-uuid>';
+    ```
+
+3b. **If NO Nicky Payment Request exists**, allow a fresh attempt by clearing the
+    attempt marker, claim, and review flag (then re-call `nicky-create-payment`
+    with the same idempotency key):
+
+    ```sql
+    update nicky_orders
+       set nicky_create_attempted_at = null,
+           creation_claimed_at        = null,
+           status                     = 'creating_payment',
+           metadata                   = metadata - 'needs_operator_review' - 'review_reason'
+     where id = '<order-uuid>';
+    ```
+
+**Known limitation:** because we set `nicky_create_attempted_at` *before* the
+call, a transient error that happened before Nicky created anything still lands
+here and needs the manual check above. This is the safe trade-off given Nicky has
+no idempotent-create / lookup-by-invoice-reference in the current API.
 
 ## Logs to collect before escalating to Nicky support
 

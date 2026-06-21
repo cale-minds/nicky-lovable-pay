@@ -31,10 +31,10 @@ jobs:
     name: Deno check (Edge Functions)
     runs-on: ubuntu-latest
     # The Edge Function entrypoints use `Deno.serve` and remote (esm.sh) imports,
-    # so they are validated with Deno rather than tsc. This needs network access
-    # to fetch remote modules. If a transient remote-import/type issue occurs,
-    # treat this job as advisory: the pure logic is covered by the Node job.
-    continue-on-error: true
+    # so they are validated with Deno rather than tsc. `deno check` needs network
+    # access to fetch the remote modules. This job is BLOCKING: CI fails if
+    # `npm run typecheck:edge` fails. (If you ever hit a transient remote-registry
+    # outage, re-run the job rather than making it advisory.)
     steps:
       - uses: actions/checkout@v4
 

@@ -52,19 +52,30 @@ The kit reads `itemId` to identify the payment request. It records
 2. **Read and persist the raw body first.** The full payload + selected headers
    are stored in `nicky_webhook_events` before any processing, so even rejected
    events are auditable.
-3. **Idempotency with safe retry.** A `dedupe_key` is computed from
+3. **Idempotency with poisoning-safe retry.** A `dedupe_key` is computed from
    `webHookId | webHookType | itemId | previousStatus | newStatus`. Insert is
-   protected by a unique constraint. On a redelivery the prior record is loaded:
-   - if it was **already processed successfully** (`processed = true`), the
-     function acks `200 { duplicate: true, alreadyProcessed: true }` without
-     redoing work;
-   - if a previous attempt did **not** finish successfully (`processed = false`,
-     e.g. the Nicky lookup errored), the function **reprocesses** it now rather
-     than silently acking — so a transient failure does not permanently lose the
-     event.
+   protected by a unique constraint, and each event carries a `processing_status`
+   (`received` → `processed` / `rejected` / `failed_retryable` /
+   `failed_non_retryable`). On a redelivery the prior record's status decides
+   what happens (see `_shared/webhook-dedupe-helpers.ts`):
+   - prior **`processed`** (the only success state) → ack
+     `200 { duplicate: true, alreadyProcessed: true }`, no rework;
+   - prior **`failed_non_retryable`** (e.g. missing `itemId`) → ack as duplicate;
+   - prior **`rejected`** (unauthorized IP), **`failed_retryable`**, or
+     **`received`** (crashed mid-process) → if the **current** request is
+     authorized, **reprocess**; if the current request is also unauthorized,
+     **reject** (`403`).
+
+   This closes a **dedupe-poisoning** hole: a `processed = true`-only check let an
+   unauthorized caller pre-insert a dedupe key (marked done) and block the later
+   legitimate Nicky delivery. Now unauthorized events are `rejected`, never
+   `processed`, so a later authorized delivery with the same key is still
+   processed. A current authorized request is never blocked by a prior
+   unauthorized one.
 4. **Source-IP validation.** The client IP must equal `NICKY_WEBHOOK_ALLOWED_IP`
-   (default `20.76.240.81`). If not, the event is recorded and rejected with
-   `403`.
+   (default `20.76.240.81`), using only the first `x-forwarded-for` entry. If not,
+   the event is recorded with `processing_status = 'rejected'` and rejected with
+   `403` — never marked processed.
 5. **Re-query Nicky.** Using `itemId`, the function calls Nicky's
    `get-by-id` endpoint server-side and maps the authoritative status.
 6. **Update the order.** Only `Finished` → `paid`. `PaymentValidationRequired` →
@@ -93,30 +104,22 @@ If your deployment sits behind a different/known proxy, set
 `NICKY_WEBHOOK_ALLOWED_IP` accordingly and review `checkWebhookIp()` in
 `supabase/functions/_shared/webhook-ip.ts`.
 
-## Configuring the webhook (once, outside the plugin)
+## Configuring the webhook (once, manually — no script)
 
-The plugin does **not** register webhooks at runtime. Register it **once**,
-after deploying the functions (the callback URL is only known then), using the
-included setup script:
+The plugin does **not** register webhooks at runtime, and there is **no** local
+script in this repository that calls Nicky's webhook setup endpoints. Configure
+the webhook **once**, after deploying the functions (the callback URL is only
+known then), in Nicky — via the Lovable setup prompt or manually in the Nicky
+dashboard:
 
-```bash
-NICKY_API_KEY=your_key \
-NICKY_WEBHOOK_URL=https://<project-ref>.functions.supabase.co/nicky-webhook \
-  npm run nicky:register-webhooks
-```
+- Callback URL (use exactly this, never an arbitrary URL):
+  `https://<project-ref>.functions.supabase.co/nicky-webhook`
+- Events: `PaymentRequest_ReportAdded` and `PaymentRequest_StatusChanged`
 
-The script (`scripts/register-nicky-webhooks.mjs`) lists existing webhooks and
-idempotently creates only the missing ones for both events
-(`PaymentRequest_ReportAdded`, `PaymentRequest_StatusChanged`) at the fixed URL.
-It is a one-time **setup** helper — not a deployed Edge Function. It never
-deletes/updates webhooks, never exposes the API key, and rejects any URL that
-isn't the fixed `/nicky-webhook` route. Full details:
-[`webhook-registration.md`](webhook-registration.md).
-
-There is no `nicky-register-webhooks` Edge Function and no `WEBHOOK_CALLBACK_URL`
-runtime secret in this plugin. Webhook lifecycle management (create/list/delete)
-is intentionally out of the plugin's production runtime; the setup-only variable
-the script reads is `NICKY_WEBHOOK_URL`.
+There is no `nicky-register-webhooks` Edge Function, no local registration
+script, and no `WEBHOOK_CALLBACK_URL` runtime secret. Webhook lifecycle
+management (create/list/update/delete) is intentionally out of the plugin
+entirely. Full details: [`webhook-registration.md`](webhook-registration.md).
 
 ## Don't rely on webhooks alone
 

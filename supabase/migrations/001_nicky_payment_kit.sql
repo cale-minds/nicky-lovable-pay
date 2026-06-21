@@ -106,9 +106,18 @@ create table if not exists nicky_orders (
   -- Concurrency guard for create-payment. A non-null, recent value means some
   -- invocation currently "owns" creating the Nicky Payment Request for this
   -- idempotency key. A stale value (older than the claim window) can be
-  -- re-claimed so a previously-failed attempt can be retried. See the
-  -- nicky_create_or_claim_order() function below.
+  -- re-claimed so a previously-failed attempt can be retried — but ONLY if the
+  -- Nicky create call was not yet attempted (see nicky_create_attempted_at and
+  -- nicky_create_or_claim_order() below).
   creation_claimed_at       timestamptz,
+
+  -- Set immediately BEFORE the external Nicky "create payment request" call.
+  -- If this is set but there is no nicky_payment_request_id, we cannot tell
+  -- whether Nicky created a Payment Request (the external call may have
+  -- succeeded while the local write failed). In that case the claim is NOT
+  -- auto-re-granted; an operator must review to avoid creating a duplicate
+  -- Nicky Payment Request. See docs/operations.md and docs/security.md.
+  nicky_create_attempted_at timestamptz,
 
   created_at                timestamptz not null default now(),
   updated_at                timestamptz not null default now()
@@ -190,6 +199,21 @@ create table if not exists nicky_webhook_events (
   raw_payload         jsonb not null,        -- full webhook body, for audit
   raw_headers         jsonb,                 -- selected headers, for audit
 
+  -- Lifecycle of THIS event (drives safe dedupe — see nicky-webhook):
+  --   received              : stored, not yet successfully processed
+  --   processed             : reconciled successfully (the only "success")
+  --   rejected              : refused (e.g. unauthorized source IP)
+  --   failed_retryable      : a transient failure; a later delivery may retry
+  --   failed_non_retryable  : structurally unusable (e.g. missing itemId)
+  -- IMPORTANT: a 'rejected' (unauthorized) event must NOT block a later
+  -- authorized event with the same dedupe key from being processed. Only
+  -- 'processed' (and 'failed_non_retryable') stop reprocessing.
+  processing_status   text not null default 'received'
+    check (processing_status in
+      ('received','processed','rejected','failed_retryable','failed_non_retryable')),
+
+  -- Retained for audit/back-compat; `processing_status = 'processed'` is the
+  -- single source of truth for success.
   processed           boolean not null default false,
   processing_error    text,
 
@@ -273,6 +297,14 @@ create table if not exists nicky_assets_cache (
 -- The stale window lets a previously-failed creation be retried later without
 -- permanently locking the idempotency key, while still preventing parallel
 -- Nicky Payment Requests for the same key.
+--
+-- EXTERNAL-CALL CONSISTENCY GUARD: a stale claim is only re-granted when the
+-- Nicky create call was NOT yet attempted (nicky_create_attempted_at IS NULL).
+-- If the call was attempted but no linkage was persisted, we cannot know
+-- whether Nicky created a Payment Request, so we refuse to auto-create another
+-- and instead flag `needs_review` for an operator. (Nicky's public API has no
+-- documented idempotent-create or lookup-by-invoice-reference, so this manual
+-- gate is the safe option — see docs/operations.md and docs/security.md.)
 -- -----------------------------------------------------------------------------
 create or replace function nicky_create_or_claim_order(
   p_idempotency_key    text,
@@ -291,7 +323,8 @@ returns table (
   payment_url              text,
   nicky_payment_request_id text,
   nicky_short_id           text,
-  claimed                  boolean
+  claimed                  boolean,
+  needs_review             boolean
 )
 language plpgsql
 as $$
@@ -314,26 +347,47 @@ begin
   -- 2. Already created: return idempotently, no claim needed.
   if v_row.payment_url is not null then
     return query select v_row.id, v_row.status, v_row.payment_url,
-      v_row.nicky_payment_request_id, v_row.nicky_short_id, false;
+      v_row.nicky_payment_request_id, v_row.nicky_short_id, false, false;
     return;
   end if;
 
-  -- 3. Try to claim creation (unclaimed or stale claim only).
+  -- 3. Try to claim creation. Grant when:
+  --      (a) unclaimed, OR
+  --      (b) the claim is stale AND the Nicky call was never attempted.
+  --    A stale claim where the Nicky call WAS attempted (but no linkage) is
+  --    intentionally NOT re-granted — see the consistency guard above.
   update nicky_orders
      set creation_claimed_at = now()
    where id = v_row.id
-     and (creation_claimed_at is null
-          or creation_claimed_at < now() - make_interval(secs => p_claim_stale_seconds))
+     and (
+       creation_claimed_at is null
+       or (creation_claimed_at < now() - make_interval(secs => p_claim_stale_seconds)
+           and nicky_create_attempted_at is null)
+     )
   returning * into v_row;
 
   if found then
     return query select v_row.id, v_row.status, v_row.payment_url,
-      v_row.nicky_payment_request_id, v_row.nicky_short_id, true;
-  else
-    -- Someone else holds an active claim; report not-claimed.
-    select * into v_row from nicky_orders where idempotency_key = p_idempotency_key;
+      v_row.nicky_payment_request_id, v_row.nicky_short_id, true, false;
+    return;
+  end if;
+
+  -- 4. Claim not granted. Distinguish "another active claim / in progress" from
+  --    "needs operator review" (stale claim, Nicky call was attempted, but no
+  --    linkage was ever persisted -> possible orphaned Nicky Payment Request).
+  select * into v_row from nicky_orders where idempotency_key = p_idempotency_key;
+
+  if v_row.payment_url is null
+     and v_row.nicky_payment_request_id is null
+     and v_row.nicky_create_attempted_at is not null
+     and v_row.creation_claimed_at is not null
+     and v_row.creation_claimed_at < now() - make_interval(secs => p_claim_stale_seconds)
+  then
     return query select v_row.id, v_row.status, v_row.payment_url,
-      v_row.nicky_payment_request_id, v_row.nicky_short_id, false;
+      v_row.nicky_payment_request_id, v_row.nicky_short_id, false, true;
+  else
+    return query select v_row.id, v_row.status, v_row.payment_url,
+      v_row.nicky_payment_request_id, v_row.nicky_short_id, false, false;
   end if;
 end;
 $$;
