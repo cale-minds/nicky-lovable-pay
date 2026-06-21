@@ -1,0 +1,31 @@
+# Supabase project configuration (partial) for the Nicky payment kit.
+#
+# Replace `project_id` with your own ref, or merge these [functions.*] blocks
+# into your existing supabase/config.toml.
+#
+# verify_jwt notes:
+#   * nicky-webhook MUST have verify_jwt = false — Nicky calls it server-to-
+#     server and cannot present a Supabase JWT. Security is enforced instead by
+#     source-IP validation + a server-side re-query (see the function code).
+#   * nicky-register-webhooks is an admin/setup action; verify_jwt = false lets
+#     you invoke it via curl during setup. Consider deleting/redeploying it
+#     behind protection after initial setup, or gate it with your own check.
+#   * The frontend-facing functions keep verify_jwt = true so the Supabase anon
+#     key (sent by the React kit) is required.
+
+project_id = "your-project-ref"
+
+[functions.nicky-create-payment]
+verify_jwt = true
+
+[functions.nicky-list-assets]
+verify_jwt = true
+
+[functions.nicky-sync-payment-status]
+verify_jwt = true
+
+[functions.nicky-webhook]
+verify_jwt = false
+
+[functions.nicky-register-webhooks]
+verify_jwt = false

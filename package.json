@@ -1,0 +1,29 @@
+{
+  "name": "nicky-lovable-plugin",
+  "version": "0.1.0",
+  "description": "Reusable, non-custodial Nicky payment integration kit for Lovable (React + TypeScript + Supabase) apps. Not a demo app.",
+  "license": "MIT",
+  "type": "module",
+  "keywords": [
+    "nicky",
+    "payments",
+    "crypto",
+    "supabase",
+    "lovable",
+    "react",
+    "non-custodial"
+  ],
+  "files": [
+    "src/nicky",
+    "supabase",
+    "docs",
+    "README.md"
+  ],
+  "peerDependencies": {
+    "react": ">=18"
+  },
+  "devDependencies": {
+    "@types/react": "^18.0.0",
+    "typescript": "^5.0.0"
+  }
+}
