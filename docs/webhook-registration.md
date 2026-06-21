@@ -87,6 +87,19 @@ Running it multiple times never creates duplicates. A webhook with the same
 event type but a **different** URL is left alone — the script will create one for
 your URL and will **not** delete or update the other.
 
+### Fails safely on an unexpected list response
+
+The list response is parsed **strictly**. The only shapes accepted are a bare
+array, `{ items: [...] }`, or `{ data: [...] }` (an empty list of any of those is
+fine and simply means "no webhooks yet"). If Nicky's list endpoint returns any
+other shape — `null`, a primitive, `{}` with no recognized array, or an
+`items`/`data` field that isn't an array — the script **stops with a clear error
+and a non-zero exit code, and creates nothing.**
+
+This is deliberate: silently treating an unrecognized response as an empty list
+could make the script create **duplicate** webhooks. If you hit this error,
+inspect the raw list response, then re-run once the shape is recognized.
+
 The script **never**:
 
 - deletes webhooks,

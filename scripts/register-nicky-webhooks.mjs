@@ -37,6 +37,7 @@ import {
   validateSetupEnv,
   maskApiKey,
   extractWebhookList,
+  WebhookListResponseError,
   planWebhookActions,
   buildCreateBody,
 } from "./webhook-registration-helpers.mjs";
@@ -107,16 +108,31 @@ async function main() {
   };
 
   // --- 1. List existing webhooks -----------------------------------------
-  let existing;
+  let listData;
   try {
     const res = await fetch(`${apiBaseUrl}/api/public/WebHookApi/list`, { headers });
-    const data = await parseJsonSafe(res);
+    listData = await parseJsonSafe(res);
     if (!res.ok) {
       fail(`Failed to list webhooks (HTTP ${res.status}). Check your API key and base URL.`);
     }
-    existing = extractWebhookList(data);
   } catch (err) {
     fail(`Network error while listing webhooks: ${err?.message ?? err}`);
+  }
+
+  // Parse the list STRICTLY. If Nicky returns an unexpected shape we fail safely
+  // here (non-zero exit, no creates) rather than risk creating duplicates.
+  let existing;
+  try {
+    existing = extractWebhookList(listData);
+  } catch (err) {
+    if (err instanceof WebhookListResponseError) {
+      fail(
+        `${err.message}\n` +
+          "Refusing to continue so duplicate webhooks are not created. " +
+          "Inspect the raw response from the list endpoint and re-run once it is recognized.",
+      );
+    }
+    fail(`Failed to parse webhook list: ${err?.message ?? err}`);
   }
 
   log(`Found ${existing.length} existing webhook(s) on the account.`);
