@@ -76,8 +76,13 @@ never proof.
 │   ├── setup.md                 # step-by-step setup
 │   ├── security.md              # the security model (read this)
 │   ├── webhooks.md              # webhook flow, IP validation, idempotency
+│   ├── webhook-registration.md  # one-time setup script for webhook registration
 │   ├── lovable-install-prompt.md# copy-paste prompt for Lovable
 │   └── troubleshooting.md
+├── scripts/                     # SETUP-ONLY helpers (not runtime, not Edge Fns)
+│   ├── register-nicky-webhooks.mjs
+│   ├── webhook-registration-helpers.mjs
+│   └── .env.webhook.example
 ├── supabase/
 │   ├── config.toml              # per-function verify_jwt settings
 │   ├── migrations/
@@ -148,24 +153,30 @@ supabase functions deploy nicky-sync-payment-status
 supabase functions deploy nicky-webhook            # verify_jwt = false
 ```
 
-### 6. Configure the webhook in Nicky (once, outside the plugin runtime)
+### 6. Register the webhook once (setup script — not a runtime function)
 
-This plugin **only processes** webhooks — it does **not** create, update, or
-delete them at runtime. Configure the webhook **once** in Nicky (manually in the
-dashboard, or via the Lovable setup prompt), pointing at the fixed callback URL,
-which is only known after deployment:
+This plugin **only processes** webhooks at runtime — it does **not** create,
+list, update, or delete them. Webhook registration is a **one-time setup step**,
+done with the included helper script (or the Lovable/Claude setup flow). It is
+**not** a deployed Edge Function.
 
+Run it **after** deploying the functions (the callback URL is only known then):
+
+```bash
+NICKY_API_KEY=your_key \
+NICKY_WEBHOOK_URL=https://<project-ref>.functions.supabase.co/nicky-webhook \
+  npm run nicky:register-webhooks
 ```
-https://<project-ref>.functions.supabase.co/nicky-webhook
-```
 
-Register it for both required events:
+The script is **idempotent**: it lists existing webhooks and only creates the
+missing ones (`PaymentRequest_ReportAdded`, `PaymentRequest_StatusChanged`) for
+the fixed callback URL `https://<project-ref>.functions.supabase.co/nicky-webhook`.
+It never deletes or updates webhooks, and it never exposes the API key. The URL
+is fixed and owned by the kit — arbitrary callback URLs are rejected.
 
-- `PaymentRequest_ReportAdded`
-- `PaymentRequest_StatusChanged`
-
-Do not use arbitrary callback URLs — the route is fixed and owned by the kit.
-See [`docs/webhooks.md`](docs/webhooks.md).
+See [`docs/webhook-registration.md`](docs/webhook-registration.md) for details,
+and [`scripts/.env.webhook.example`](scripts/.env.webhook.example) for the
+setup-only variables.
 
 ---
 

@@ -79,15 +79,30 @@ https://pay.nicky.me), NICKY_WEBHOOK_ALLOWED_IP (default 20.76.240.81).
 There is NO WEBHOOK_CALLBACK_URL and NO NICKY_ASSETS_ENDPOINT variable.
 Frontend gets only the public Supabase functions URL and anon key.
 
-AFTER INSTALLING, tell me to:
+WEBHOOK REGISTRATION RULES:
+- Do NOT create a nicky-register-webhooks Edge Function.
+- Do NOT deploy webhook-registration code as an Edge Function.
+- Do NOT delete or update webhooks.
+- Do NOT expose the Nicky API key (it is used only by the local setup script).
+- Do NOT let users choose arbitrary callback URLs in any runtime UI.
+- Webhook registration is a ONE-TIME setup step run via the included script
+  scripts/register-nicky-webhooks.mjs (npm run nicky:register-webhooks), which
+  is idempotent and only creates missing webhooks.
+
+AFTER INSTALLING, tell me (the user) to:
 1) set the NICKY_API_KEY secret,
 2) run the migration,
-3) deploy the four functions,
-4) configure the webhook ONCE in Nicky, pointing at
-   https://<project-ref>.functions.supabase.co/nicky-webhook for the events
-   PaymentRequest_ReportAdded and PaymentRequest_StatusChanged (no arbitrary
-   URLs; the plugin does not create or delete webhooks),
-5) add the checkout UI using the provided components.
+3) deploy the four Edge Functions,
+4) derive (or ask me for) the deployed webhook URL:
+   https://<project-ref>.functions.supabase.co/nicky-webhook,
+5) run the one-time setup script:
+   NICKY_API_KEY=... NICKY_WEBHOOK_URL=https://<project-ref>.functions.supabase.co/nicky-webhook \
+     npm run nicky:register-webhooks
+   (the script reads the setup-only vars NICKY_API_KEY, optional
+   NICKY_API_BASE_URL, and NICKY_WEBHOOK_URL — see scripts/.env.webhook.example),
+6) confirm that BOTH events (PaymentRequest_ReportAdded and
+   PaymentRequest_StatusChanged) were either created or already existed,
+7) wire the frontend checkout UI using the provided components.
 
 Confirm payment ONLY via a server-side Nicky lookup. Treat the success redirect
 and the webhook as signals, never as proof of payment.
@@ -98,5 +113,6 @@ and the webhook as signals, never as proof of payment.
 ## After Lovable finishes
 
 Follow the post-install steps in [`setup.md`](setup.md): set the secret, run the
-migration, deploy the four functions, configure the webhook once in Nicky, and
-wire the checkout UI.
+migration, deploy the four functions, run the one-time webhook registration
+script (`npm run nicky:register-webhooks` — see
+[`webhook-registration.md`](webhook-registration.md)), and wire the checkout UI.

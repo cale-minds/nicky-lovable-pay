@@ -69,9 +69,26 @@ The source IP didn't match `NICKY_WEBHOOK_ALLOWED_IP`. Check:
 - The default is `20.76.240.81`. Confirm Nicky still uses it.
 - Look at the stored event in `nicky_webhook_events` — `source_ip` and
   `raw_headers` show what arrived. If you're behind an extra proxy, adjust
-  `extractClientIps()` or the allowed IP.
+  `checkWebhookIp()` in `_shared/webhook-ip.ts` or the allowed IP.
 
 The event is still recorded even when rejected, so you can debug after the fact.
+
+## Webhook registration script fails or seems to do nothing
+
+The one-time setup script is `scripts/register-nicky-webhooks.mjs`
+(`npm run nicky:register-webhooks`). Common issues:
+
+- **"NICKY_API_KEY is required" / "NICKY_WEBHOOK_URL is required".** Provide both
+  env vars (see `scripts/.env.webhook.example`).
+- **"NICKY_WEBHOOK_URL must use HTTPS" / "must end with `/nicky-webhook`".** The
+  URL is fixed: `https://<project-ref>.functions.supabase.co/nicky-webhook`.
+- **"already registered for this URL (no change)".** This is expected and correct
+  — the script is idempotent, so re-running it does not create duplicates.
+- **HTTP error listing/creating.** Verify the API key is valid and
+  `NICKY_API_BASE_URL` is correct. Use `--dry-run` to validate inputs without
+  calling Nicky.
+- Remember this is a **setup-only** script. It is not deployed and does not run
+  in production. The plugin runtime only *processes* webhooks.
 
 ## Order never becomes `paid`
 
