@@ -37,9 +37,14 @@ enforced consistently no matter what triggers a check.
 
 Even a webhook is not trusted as the source of truth:
 
-- **Source IP check.** The receiver compares the request's client IP against
-  `NICKY_WEBHOOK_ALLOWED_IP` (default `20.76.240.81`). Non-matching requests are
-  rejected with `403` (but still recorded for audit).
+- **Source IP check, before any DB write.** The receiver compares the request's
+  client IP against `NICKY_WEBHOOK_ALLOWED_IP` (default `20.76.240.81`) **before
+  reading/parsing/storing the body**. Non-matching requests get `403` and are
+  **not** persisted in `nicky_webhook_events` — they appear only in
+  platform/function logs. This prevents storage-amplification abuse (POSTing junk
+  to force DB writes). Only authorized requests are stored for audit.
+- **Body size cap.** Authorized requests are capped at 64 KB
+  (`MAX_WEBHOOK_BODY_BYTES`), enforced via `Content-Length` and while streaming.
 - **Proxy headers, handled carefully.** Supabase fronts functions with a proxy,
   so we read `x-forwarded-for` and use **only the first (left-most) entry** (the
   original client recorded by the trusted edge). We do **not** scan arbitrary
@@ -49,6 +54,10 @@ Even a webhook is not trusted as the source of truth:
   cannot cause a false `paid`, because of the next point.
 - **Mandatory re-query.** The webhook body's `newStatus` is **never** trusted.
   We use `itemId` to ask Nicky directly, and only then update the order.
+- **Recommended edge allowlisting.** In production, additionally allowlist the
+  webhook endpoint to Nicky's source IP at the infrastructure layer
+  (Cloudflare/WAF/gateway) so junk never reaches the function. The code-side check
+  is the backstop; the edge allowlist is the front door. See `docs/webhooks.md`.
 
 So the webhook does not need to be cryptographically trusted to be safe: the
 re-query is the real gate. The IP check simply reduces noise and abuse.
@@ -127,6 +136,31 @@ arbitrary users create arbitrary payments. Recommended patterns:
 The kit does not ship a product catalog (by design). These checks live in the
 consuming app.
 
+> **Hard production gate:** do not go live until the consuming app validates
+> amount / product / order server-side before invoking `nicky-create-payment`.
+> `nicky-create-payment` is **not** a dry-run or quote endpoint — it creates a
+> real Nicky Payment Request, returns the real payment URL, and writes local
+> order/payment linkage.
+
+### Public-boundary risk: `nicky-sync-payment-status`
+
+`nicky-sync-payment-status` re-queries Nicky server-side, updates the local
+status, and is used by the success page / manual sync / reconciliation-style
+flows. It **never** trusts the browser as proof of payment (it always asks
+Nicky). However, it currently accepts `orderId`, `nickyPaymentRequestId`, **or
+`nickyShortId`** with no ownership check, and it is reachable with the public
+Supabase anon key.
+
+- Short ids are short and guessable → exposing this endpoint to untrusted users
+  lets them probe arbitrary payment statuses and trigger Nicky lookups + audit
+  writes (information disclosure + amplification).
+- **Safer for browser flows:** use only the high-entropy local `orderId` (a
+  UUID). Treat `nickyShortId` / `nickyPaymentRequestId` lookups as server/admin
+  flows behind stronger authorization or a secret.
+- This kit does not change the behavior by default; the deployment decision is a
+  production gate in `docs/production-checklist.md` (restrict to `orderId`, or
+  accept the exposure and add rate limiting / auth in the consuming app).
+
 ## 10. Rate limiting / abuse control
 
 Attackers can spam `nicky-create-payment`. In order of effectiveness:
@@ -156,11 +190,35 @@ Attackers can spam `nicky-create-payment`. In order of effectiveness:
   (`metadata.payment_request_row_missing`) and the row is repaired on the next
   idempotent retry (non-clobbering upsert). See `docs/operations.md`.
 - **Webhook reprocessing & dedupe poisoning.** Each webhook event carries a
-  `processing_status`; only `processed` counts as success. An unauthorized
-  delivery is stored as `rejected` (never `processed`), so it cannot block a
-  later authorized delivery with the same dedupe key from being processed. A
-  prior `rejected` / `failed_retryable` / `received` event is reprocessed when a
-  later **authorized** request arrives.
+  `processing_status`; only `processed` counts as success. Unauthorized requests
+  are rejected before any insert (so they cannot pre-create a dedupe key at all —
+  poisoning is structurally impossible). A prior `failed_retryable` / `received`
+  event is reprocessed (with refreshed audit fields) when a later authorized
+  request arrives.
+
+### Status terminality: `paid` is NOT terminal — only `Canceled` is
+
+This is a deliberate business rule from Nicky, not an oversight:
+
+- `Canceled` is the **only** terminal Payment Request state.
+- `Finished` / local `paid` is **not** terminal. Under specific real Nicky
+  circumstances a Payment Request that was `Finished` can move back to
+  `PaymentPending`, and a webhook for that transition may legitimately arrive.
+- Therefore local `status` **follows the latest trusted server-side Nicky
+  lookup**: `PaymentPending` → `waiting_payment` **even if the order was
+  previously `paid`**. The kit does **not** make `paid` sticky.
+- `paid_at` records the **first** time the order was confirmed paid; it is **not**
+  a guarantee that the order is *currently* paid.
+- **Entitlement/fulfillment must gate on the current local `status === "paid"`**,
+  not merely on the existence of `paid_at`. If you grant access purely because
+  `paid_at` is set, a payment that later returns to `waiting_payment` would keep
+  access it should no longer have.
+
+Known follow-up: local `canceled` terminality is **not** currently enforced in
+code (reconciliation always writes the latest mapped status). Since `Canceled` is
+terminal in Nicky, a re-query of a canceled order returns `Canceled` again, so in
+practice the status stays `canceled`; but the kit does not hard-guard against a
+(non-contractual) transition away from `canceled`. See the audit follow-up note.
 
 ## 12. External-call / DB-write consistency (known limitation)
 

@@ -64,14 +64,18 @@ Supabase JWT. Redeploy with `verify_jwt = false` (see `supabase/config.toml`).
 
 ## Webhook returns 403
 
-The source IP didn't match `NICKY_WEBHOOK_ALLOWED_IP`. Check:
+The source IP didn't match `NICKY_WEBHOOK_ALLOWED_IP`. Unauthorized requests are
+rejected **before** the body is read or stored, so they are **not** in
+`nicky_webhook_events` — debug from the function logs instead:
 
-- The default is `20.76.240.81`. Confirm Nicky still uses it.
-- Look at the stored event in `nicky_webhook_events` — `source_ip` and
-  `raw_headers` show what arrived. If you're behind an extra proxy, adjust
-  `checkWebhookIp()` in `_shared/webhook-ip.ts` or the allowed IP.
-
-The event is still recorded even when rejected, so you can debug after the fact.
+- The default allowed IP is `20.76.240.81`. Confirm Nicky still uses it.
+- `supabase functions logs nicky-webhook` → look for
+  `Rejected webhook from unauthorized IP <ip> ua: <user-agent>`.
+- If you're behind an extra proxy that changes the first `x-forwarded-for` entry,
+  adjust `checkWebhookIp()` in `_shared/webhook-ip.ts` or the allowed IP.
+- Only authorized deliveries are persisted; inspect those with
+  `select source_ip, ip_allowed, processing_status from nicky_webhook_events
+  order by received_at desc limit 20;`.
 
 ## Webhook isn't being received / not configured
 

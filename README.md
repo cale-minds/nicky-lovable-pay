@@ -294,6 +294,14 @@ Nicky → local mapping:
 | `Finished`                  | `paid`                  | **Yes**         |
 | `Canceled`                  | `canceled`              | No              |
 
+**`paid` is not terminal — only `Canceled` is.** Under certain real Nicky
+circumstances a Payment Request that was `Finished` can move back to
+`PaymentPending`; the kit follows the latest server-side lookup and will set the
+local status back to `waiting_payment` (a webhook for this may arrive). `paid_at`
+records the **first** time the order was confirmed paid and is preserved, but it
+is **not** a current-state guarantee. **Gate entitlement on the current local
+`status === "paid"`, not on `paid_at`.**
+
 ### Handling `PaymentValidationRequired`
 
 This means Nicky still needs to validate the payment. The order is marked
@@ -320,8 +328,9 @@ periodic `nicky-sync-payment-status` move it to `paid` once Nicky returns
 | `VITE_SUPABASE_ANON_KEY`    | Frontend     | —                                  | Public anon key.                       |
 
 > **Removed in this version:** there is no `NICKY_ASSETS_ENDPOINT` (assets come
-> from the fixed endpoint `GET /AcceptedAsset/get-for-user`) and no
-> `WEBHOOK_CALLBACK_URL` (the plugin no longer registers webhooks at runtime).
+> from the fixed endpoint `GET /AcceptedAsset/get-for-user` — intentionally **no**
+> `/api/public` prefix; do not change it) and no `WEBHOOK_CALLBACK_URL` (the
+> plugin no longer registers webhooks at runtime).
 
 ### Payment request identifiers
 

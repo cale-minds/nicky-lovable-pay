@@ -91,18 +91,44 @@ features.** Re-sync periodically; it becomes `paid` only when Nicky returns
 `Finished`. If it stays here unusually long, collect the logs below and contact
 Nicky support.
 
+### Order moved from `paid` back to `waiting_payment`
+
+This can be legitimate. **`paid` is not terminal in Nicky — only `Canceled`
+is.** A Payment Request that was `Finished` can return to `PaymentPending` under
+certain Nicky circumstances, and a webhook for that may arrive; the kit follows
+the latest trusted Nicky lookup and will set the local status back to
+`waiting_payment`. `paid_at` is preserved (it records the *first* time paid), but
+it does **not** mean the order is currently paid.
+
+Operational implication: **entitlement must gate on current `status = 'paid'`,
+not on `paid_at` being set.** To audit why a status changed, read
+`nicky_payment_status_checks` for that order (it records each Nicky lookup and the
+resulting status). No action is needed unless your fulfillment logic incorrectly
+relied on `paid_at`.
+
 ### Webhook returns 403
 
-The source IP didn't match `NICKY_WEBHOOK_ALLOWED_IP`. Inspect the stored event:
+The source IP didn't match `NICKY_WEBHOOK_ALLOWED_IP`. **Unauthorized requests
+are rejected before any DB write, so they are NOT in `nicky_webhook_events`** —
+diagnose from the platform/function logs instead:
 
-```sql
-select source_ip, ip_allowed, raw_headers, raw_payload
-from nicky_webhook_events order by received_at desc limit 20;
+```bash
+supabase functions logs nicky-webhook
+# look for: "Rejected webhook from unauthorized IP <ip> ua: <user-agent>"
 ```
 
 Confirm Nicky's current source IP and that you're reading the **first**
-`x-forwarded-for` entry. The event is recorded even when rejected, so you can
-diagnose after the fact. Reconciliation still keeps orders current regardless.
+`x-forwarded-for` entry (and that any edge/WAF allowlist matches Nicky's IP). Only
+authorized webhook deliveries are persisted (with their `source_ip` / `ip_allowed`
+/ `raw_payload`). Reconciliation (`nicky-reconcile-open-orders`) keeps orders
+current regardless of webhook delivery.
+
+Inspect persisted (authorized) events with:
+
+```sql
+select source_ip, ip_allowed, processing_status, raw_headers
+from nicky_webhook_events order by received_at desc limit 20;
+```
 
 ### Nicky lookup fails (sync/webhook/reconcile)
 

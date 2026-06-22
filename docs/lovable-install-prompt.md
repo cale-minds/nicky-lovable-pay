@@ -94,12 +94,25 @@ NICKY_CREATE_RATE_LIMIT_PER_HOUR (optional, default 0 = disabled).
 There is NO WEBHOOK_CALLBACK_URL and NO NICKY_ASSETS_ENDPOINT variable.
 Frontend gets only the public Supabase functions URL and anon key.
 
-PRODUCTION RULES:
-- The consuming app MUST validate amount/product server-side before calling
-  nicky-create-payment (never trust the browser's amount/invoiceReference). Do
-  NOT add a demo product catalog to the kit.
+PRODUCTION RULES (hard gates — do not go live until satisfied):
+- nicky-create-payment creates a REAL Nicky Payment Request (not a quote/dry-run),
+  returns the real payment URL, and writes local linkage. The consuming app MUST
+  authenticate/authorize users and validate amount/product/invoiceReference/payer
+  server-side BEFORE calling it. If exposed to anonymous users directly, anyone
+  can create real Payment Requests on the merchant's Nicky account. Do NOT add a
+  demo product catalog to the kit (the kit doesn't know your product/order model).
+- nicky-sync-payment-status re-queries Nicky and updates local status; for browser
+  flows prefer the high-entropy orderId (UUID). Treat lookups by nickyShortId /
+  nickyPaymentRequestId as server/admin flows; short ids are guessable. Restrict
+  to orderId for untrusted clients, or add rate limiting/auth.
+- Accepted assets load from GET /AcceptedAsset/get-for-user — intentionally NO
+  /api/public prefix. Do NOT change this path.
 - Add rate limiting / abuse control (app auth + WAF/Cloudflare; optionally the
-  built-in soft cap).
+  built-in soft cap). Additionally allowlist the nicky-webhook endpoint to Nicky's
+  source IP (20.76.240.81) at the edge where possible.
+- `paid` is NOT terminal (only `Canceled` is): a paid order can return to
+  waiting_payment if Nicky reports PaymentPending. Gate entitlement on the current
+  local status === "paid", not on paid_at.
 
 WEBHOOK SETUP RULES (no script, no runtime function):
 - Do NOT create a nicky-register-webhooks Edge Function.

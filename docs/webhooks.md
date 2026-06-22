@@ -49,39 +49,43 @@ The kit reads `itemId` to identify the payment request. It records
 ## Processing flow (`nicky-webhook`)
 
 1. **POST only.** Any other method → `405`.
-2. **Read and persist the raw body first.** The full payload + selected headers
-   are stored in `nicky_webhook_events` before any processing, so even rejected
-   events are auditable.
-3. **Idempotency with poisoning-safe retry.** A `dedupe_key` is computed from
+2. **Source-IP validation FIRST — before reading or storing the body.** The
+   client IP must equal `NICKY_WEBHOOK_ALLOWED_IP` (default `20.76.240.81`), using
+   only the first `x-forwarded-for` entry (direct IP fallback). If it does not
+   match, the function returns `403` **without reading/parsing/persisting the
+   body** and logs only a concise warning (source IP + truncated user-agent).
+   **Rejected unauthorized attempts are therefore NOT stored in
+   `nicky_webhook_events`** — they appear only in platform/function logs. This
+   prevents storage-amplification abuse (anyone POSTing junk to force DB writes).
+3. **Body size cap (authorized requests).** A small defense-in-depth limit
+   (`MAX_WEBHOOK_BODY_BYTES`, 64 KB — Nicky payloads are tiny) is enforced: if
+   `Content-Length` exceeds it → `413`; the body is also read with a running byte
+   cap so a chunked request without `Content-Length` can't bypass it.
+4. **Persist the raw (authorized) event** with `processing_status = 'received'`.
+5. **Idempotency with poisoning-safe retry.** A `dedupe_key` is computed from
    `webHookId | webHookType | itemId | previousStatus | newStatus`. Insert is
    protected by a unique constraint, and each event carries a `processing_status`
-   (`received` → `processed` / `rejected` / `failed_retryable` /
-   `failed_non_retryable`). On a redelivery the prior record's status decides
-   what happens (see `_shared/webhook-dedupe-helpers.ts`):
+   (`received` → `processed` / `failed_retryable` / `failed_non_retryable`). On a
+   redelivery the prior record's status decides what happens (see
+   `_shared/webhook-dedupe-helpers.ts`):
    - prior **`processed`** (the only success state) → ack
      `200 { duplicate: true, alreadyProcessed: true }`, no rework;
    - prior **`failed_non_retryable`** (e.g. missing `itemId`) → ack as duplicate;
-   - prior **`rejected`** (unauthorized IP), **`failed_retryable`**, or
-     **`received`** (crashed mid-process) → if the **current** request is
-     authorized, **reprocess**; if the current request is also unauthorized,
-     **reject** (`403`).
+   - any other prior state → **reprocess**, refreshing the audit fields
+     (`source_ip` / `ip_allowed` / `raw_payload` / `raw_headers`) to the current
+     attempt.
 
-   This closes a **dedupe-poisoning** hole: a `processed = true`-only check let an
-   unauthorized caller pre-insert a dedupe key (marked done) and block the later
-   legitimate Nicky delivery. Now unauthorized events are `rejected`, never
-   `processed`, so a later authorized delivery with the same key is still
-   processed. A current authorized request is never blocked by a prior
-   unauthorized one.
-4. **Source-IP validation.** The client IP must equal `NICKY_WEBHOOK_ALLOWED_IP`
-   (default `20.76.240.81`), using only the first `x-forwarded-for` entry. If not,
-   the event is recorded with `processing_status = 'rejected'` and rejected with
-   `403` — never marked processed.
-5. **Re-query Nicky.** Using `itemId`, the function calls Nicky's
+   Because unauthorized requests are now rejected **before** any insert (step 2),
+   **dedupe poisoning is structurally impossible** — an attacker cannot pre-create
+   a row for a future dedupe key at all.
+6. **Re-query Nicky.** Using `itemId`, the function calls Nicky's
    `get-by-id` endpoint server-side and maps the authoritative status.
-6. **Update the order.** Only `Finished` → `paid`. `PaymentValidationRequired` →
-   `validation_required` (stays locked). `Canceled` → `canceled`.
-7. **Acknowledge.** Returns `200` with the resolved status, or `500` (so Nicky
-   retries) if the re-query failed. The raw event is already stored either way.
+7. **Update the order.** Only `Finished` → `paid`. `PaymentValidationRequired` →
+   `validation_required` (stays locked). `Canceled` → `canceled`. `PaymentPending`
+   → `waiting_payment` — **even if the order was previously `paid`** (`paid` is not
+   terminal in Nicky; only `Canceled` is). See docs/security.md.
+8. **Acknowledge.** Returns `200` with the resolved status, or `500` (so Nicky
+   retries) if the re-query failed (the event is marked `failed_retryable`).
 
 ## A note on proxy headers and IP spoofing
 
@@ -96,9 +100,19 @@ the allowed IP somewhere in a loosely-scanned header. If the first entry is not
 the allowed IP, the request is rejected with `403`.
 
 Even so, IP validation is only defense-in-depth. The real guarantee comes from
-the mandatory **server-side re-query** (step 5): the webhook only ever causes the
-order to reflect what Nicky's API says when queried directly. A forged IP can, at
-worst, get an event recorded — it cannot fabricate a `Finished` status.
+the mandatory **server-side re-query** (step 6): the webhook only ever causes the
+order to reflect what Nicky's API says when queried directly. A forged IP cannot
+fabricate a `Finished` status.
+
+### Recommended: edge / WAF IP allowlisting (production)
+
+The code-side IP check is necessary but runs *inside* the function. In
+production you should **also** restrict the webhook endpoint at the
+infrastructure layer (Cloudflare/WAF/API gateway/Supabase network controls) to
+Nicky's current source IP (`20.76.240.81`) so junk traffic never reaches the
+function at all. The code-side check remains the backstop; the edge allowlist is
+the front door. (Unauthorized requests are already rejected before any DB write,
+but edge filtering also saves invocation cost and noise.)
 
 If your deployment sits behind a different/known proxy, set
 `NICKY_WEBHOOK_ALLOWED_IP` accordingly and review `checkWebhookIp()` in

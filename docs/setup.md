@@ -43,6 +43,13 @@ supabase secrets set NICKY_WEBHOOK_ALLOWED_IP=20.76.240.81
 Accepted assets are read from the fixed endpoint
 `GET /AcceptedAsset/get-for-user` — there is no configurable assets endpoint.
 
+> **Do not change this path.** It is intentionally exactly
+> `/AcceptedAsset/get-for-user` and does **not** include the `/api/public` prefix
+> that the PaymentRequest endpoints use — that matches the current Nicky API
+> contract for accepted assets. Do **not** "fix" it to
+> `/api/public/AcceptedAsset/get-for-user`. Verify the exact path against the live
+> Nicky API during E2E before production.
+
 ## 4. Copy the kit files into your project
 
 From this repository, copy:

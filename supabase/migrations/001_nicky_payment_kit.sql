@@ -175,8 +175,10 @@ create trigger nicky_payment_requests_set_updated_at
 
 -- -----------------------------------------------------------------------------
 -- nicky_webhook_events
--- Raw, immutable record of every webhook Nicky sends us. Stored BEFORE any
--- processing so we always retain the audit trail, even for events we reject.
+-- Raw record of every AUTHORIZED webhook Nicky sends us, stored before
+-- processing (audit trail). NOTE: requests from an unauthorized source IP are
+-- rejected (403) BEFORE the body is read/stored — they are NOT persisted here
+-- (only in platform/function logs), to avoid storage-amplification abuse.
 -- -----------------------------------------------------------------------------
 create table if not exists nicky_webhook_events (
   id                  uuid primary key default gen_random_uuid(),
@@ -202,12 +204,14 @@ create table if not exists nicky_webhook_events (
   -- Lifecycle of THIS event (drives safe dedupe — see nicky-webhook):
   --   received              : stored, not yet successfully processed
   --   processed             : reconciled successfully (the only "success")
-  --   rejected              : refused (e.g. unauthorized source IP)
+  --   rejected              : reserved/legacy. Unauthorized requests are now
+  --                           rejected (403) BEFORE any row is written, so this
+  --                           value is not produced for unauthorized IPs anymore;
+  --                           the dedupe helper still treats it as non-terminal.
   --   failed_retryable      : a transient failure; a later delivery may retry
   --   failed_non_retryable  : structurally unusable (e.g. missing itemId)
-  -- IMPORTANT: a 'rejected' (unauthorized) event must NOT block a later
-  -- authorized event with the same dedupe key from being processed. Only
-  -- 'processed' (and 'failed_non_retryable') stop reprocessing.
+  -- IMPORTANT: only 'processed' (and 'failed_non_retryable') stop reprocessing;
+  -- any other prior state allows a later authorized delivery to be processed.
   processing_status   text not null default 'received'
     check (processing_status in
       ('received','processed','rejected','failed_retryable','failed_non_retryable')),
@@ -391,6 +395,46 @@ begin
   end if;
 end;
 $$;
+
+-- -----------------------------------------------------------------------------
+-- Harden the RPC: pin search_path and restrict who may EXECUTE it.
+--
+--   * Edge Functions call this via the SERVICE-ROLE client, which is the only
+--     role that should ever invoke it.
+--   * Browser roles (anon/authenticated) must NOT call it directly. Even though
+--     RLS (enabled below, with no permissive policies) already blocks the inner
+--     writes for those roles, we revoke EXECUTE as defense-in-depth.
+--   * A fixed search_path avoids search-path injection (the function is plpgsql).
+--     Tables are in `public`; pg_catalog is included for built-ins like now().
+--
+-- Signature must match exactly:
+--   nicky_create_or_claim_order(text, text, text, numeric, text, text, text, jsonb, int)
+-- -----------------------------------------------------------------------------
+alter function nicky_create_or_claim_order(
+  text, text, text, numeric, text, text, text, jsonb, int
+) set search_path = public, pg_catalog;
+
+revoke execute on function nicky_create_or_claim_order(
+  text, text, text, numeric, text, text, text, jsonb, int
+) from public;
+
+-- These roles exist on Supabase; guarded with DO blocks so the migration also
+-- runs on a plain Postgres without them.
+do $$
+begin
+  if exists (select 1 from pg_roles where rolname = 'anon') then
+    execute 'revoke execute on function nicky_create_or_claim_order('
+      || 'text, text, text, numeric, text, text, text, jsonb, int) from anon';
+  end if;
+  if exists (select 1 from pg_roles where rolname = 'authenticated') then
+    execute 'revoke execute on function nicky_create_or_claim_order('
+      || 'text, text, text, numeric, text, text, text, jsonb, int) from authenticated';
+  end if;
+  if exists (select 1 from pg_roles where rolname = 'service_role') then
+    execute 'grant execute on function nicky_create_or_claim_order('
+      || 'text, text, text, numeric, text, text, text, jsonb, int) to service_role';
+  end if;
+end$$;
 
 -- -----------------------------------------------------------------------------
 -- Row Level Security
