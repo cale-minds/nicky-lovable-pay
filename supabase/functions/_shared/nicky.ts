@@ -126,8 +126,15 @@ export async function getPaymentRequestByShortId(
  *
  * Returns the raw accepted-assets payload. Normalization (and empty/invalid
  * handling) is done by `normalizeAcceptedAssets` in `./assets.ts`.
+ *
+ * INTENTIONAL: this path is exactly `/AcceptedAsset/get-for-user` and does NOT
+ * include the `/api/public` prefix that the PaymentRequest endpoints use. This
+ * matches the current Nicky API contract for accepted assets — do NOT "fix" it
+ * to `/api/public/AcceptedAsset/get-for-user`. Verify the exact path against the
+ * live Nicky API during E2E before production.
  */
 export async function getAcceptedAssets(env: NickyEnv): Promise<unknown> {
+  // NOTE: no `/api/public` prefix here — intentional (see doc comment above).
   const res = await fetch(`${env.apiBaseUrl}/AcceptedAsset/get-for-user`, {
     headers: authHeaders(env),
   });

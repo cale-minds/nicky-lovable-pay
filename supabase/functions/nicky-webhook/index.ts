@@ -7,17 +7,21 @@
 // Security posture (see docs/security.md and docs/webhooks.md):
 //   1. POST only.
 //   2. Validate the source IP is Nicky's (`NICKY_WEBHOOK_ALLOWED_IP`,
-//      default 20.76.240.81), using only the first x-forwarded-for entry.
-//   3. Store the raw event BEFORE processing (full audit trail), with a
+//      default 20.76.240.81), using only the first x-forwarded-for entry —
+//      BEFORE reading/parsing/storing the body. Unauthorized requests get a 403
+//      with no DB write (storage-amplification hardening), so they never reach
+//      `nicky_webhook_events` (they appear only in function logs).
+//   2b. Enforce a small body-size cap (defense-in-depth) for authorized requests.
+//   3. Store the raw (authorized) event BEFORE processing (audit trail), with a
 //      `processing_status` lifecycle. Only 'processed' means success.
 //   4. Do NOT trust the webhook body's status. Use `itemId` to re-query Nicky
 //      server-side and only then update the local order. An order only becomes
 //      `paid` if Nicky returns `Finished`.
 //   5. Safe dedupe: a redelivery acks as a duplicate only if the prior event
 //      truly succeeded ('processed') or is structurally unusable
-//      ('failed_non_retryable'). A prior 'rejected' (unauthorized IP) event must
-//      NOT block a later AUTHORIZED delivery — that closes a dedupe-poisoning
-//      hole. See _shared/webhook-dedupe-helpers.ts.
+//      ('failed_non_retryable'); other prior states reprocess and refresh audit
+//      fields. Because unauthorized requests are now rejected before any insert,
+//      dedupe poisoning is structurally impossible. See _shared/webhook-dedupe-helpers.ts.
 //
 // NOTE ON PROXY HEADERS: Supabase fronts functions with a proxy, so the direct
 // socket IP is not Nicky's. We therefore read `x-forwarded-for`. Because that
@@ -35,6 +39,7 @@ import { reconcileOrder } from "../_shared/reconcile.ts";
 import { NickyApiError } from "../_shared/nicky.ts";
 import { checkWebhookIp } from "../_shared/webhook-ip.ts";
 import { decideDuplicateAction } from "../_shared/webhook-dedupe-helpers.ts";
+import { MAX_WEBHOOK_BODY_BYTES, contentLengthExceeds } from "../_shared/webhook-body.ts";
 
 /** Stable dedupe key for an event, used to enforce idempotency. */
 function buildDedupeKey(payload: Record<string, unknown>): string {
@@ -48,6 +53,44 @@ function buildDedupeKey(payload: Record<string, unknown>): string {
   ].join("|");
 }
 
+/**
+ * Reads the request body while enforcing a hard byte cap. Streaming the body and
+ * counting bytes means a chunked request WITHOUT a Content-Length header still
+ * can't exceed the limit. Returns the text, or `{ tooLarge: true }`.
+ */
+async function readBodyWithLimit(
+  req: Request,
+  maxBytes: number,
+): Promise<string | { tooLarge: true }> {
+  if (!req.body) return "";
+  const reader = req.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value) {
+      total += value.byteLength;
+      if (total > maxBytes) {
+        try {
+          await reader.cancel();
+        } catch {
+          // ignore
+        }
+        return { tooLarge: true };
+      }
+      chunks.push(value);
+    }
+  }
+  const merged = new Uint8Array(total);
+  let offset = 0;
+  for (const c of chunks) {
+    merged.set(c, offset);
+    offset += c.byteLength;
+  }
+  return new TextDecoder().decode(merged);
+}
+
 Deno.serve(async (req, connInfo) => {
   // 1. POST only. No CORS preflight handling — this is server-to-server.
   if (req.method !== "POST") {
@@ -55,21 +98,17 @@ Deno.serve(async (req, connInfo) => {
   }
 
   const env = getNickyEnv();
-  const supabase = getServiceClient();
 
-  // Read the raw body up front so we can persist it even if later steps fail.
-  let payload: Record<string, unknown>;
-  let rawText: string;
-  try {
-    rawText = await req.text();
-    payload = rawText ? JSON.parse(rawText) : {};
-  } catch {
-    return errorResponse("Webhook body must be valid JSON.", 400);
-  }
-
-  // 2. Validate source IP. Only the FIRST x-forwarded-for entry is trusted
-  //    (set by the Supabase edge proxy); we fall back to the direct connection
-  //    IP when the header is absent. We do not scan arbitrary headers/positions.
+  // 2. Validate source IP BEFORE reading or storing the body. Only the FIRST
+  //    x-forwarded-for entry is trusted (set by the Supabase edge proxy); we fall
+  //    back to the direct connection IP when the header is absent. We do not scan
+  //    arbitrary headers/positions.
+  //
+  //    STORAGE-AMPLIFICATION HARDENING: unauthorized requests are rejected here,
+  //    before we read/parse/persist the body. An attacker therefore cannot force
+  //    a DB write by POSTing arbitrary payloads. (Infrastructure-level IP
+  //    allowlisting to Nicky's source IP is still recommended in production so
+  //    junk never reaches the function at all — see docs/security.md.)
   const directIp = (connInfo as { remoteAddr?: { hostname?: string } } | undefined)?.remoteAddr
     ?.hostname;
   const { allowed: ipAllowed, clientIp } = checkWebhookIp({
@@ -77,6 +116,40 @@ Deno.serve(async (req, connInfo) => {
     forwardedFor: req.headers.get("x-forwarded-for"),
     directIp,
   });
+
+  if (!ipAllowed) {
+    // Concise log only — never log the (unread) body. Rejected unauthorized
+    // attempts are visible in platform/function logs, NOT in nicky_webhook_events.
+    console.warn(
+      "Rejected webhook from unauthorized IP",
+      clientIp ?? "(unknown)",
+      "ua:",
+      (req.headers.get("user-agent") ?? "").slice(0, 120),
+    );
+    return errorResponse("Forbidden: source IP not allowed.", 403);
+  }
+
+  const supabase = getServiceClient();
+
+  // 2b. Defense-in-depth body size cap (Nicky webhook payloads are tiny).
+  if (contentLengthExceeds(req.headers.get("content-length"), MAX_WEBHOOK_BODY_BYTES)) {
+    return errorResponse("Payload too large.", 413);
+  }
+
+  // Read the (authorized) body up front so we can persist it for audit, enforcing
+  // the cap while streaming so a chunked body can't bypass it.
+  const readResult = await readBodyWithLimit(req, MAX_WEBHOOK_BODY_BYTES);
+  if (typeof readResult !== "string") {
+    return errorResponse("Payload too large.", 413);
+  }
+  const rawText = readResult;
+
+  let payload: Record<string, unknown>;
+  try {
+    payload = rawText ? JSON.parse(rawText) : {};
+  } catch {
+    return errorResponse("Webhook body must be valid JSON.", 400);
+  }
 
   const data = (payload.data as Record<string, unknown> | undefined) ?? {};
   const dedupeKey = buildDedupeKey(payload);
@@ -165,24 +238,9 @@ Deno.serve(async (req, connInfo) => {
     }
   }
 
-  // 3b. IP gate. Applies to fresh inserts; the reprocess path above only runs
-  //     for authorized requests, so this is a no-op there. Unauthorized events
-  //     are marked 'rejected' (NOT 'processed'), so they never poison dedupe.
-  if (!ipAllowed) {
-    console.warn("Rejected webhook from unauthorized IP", clientIp ?? "(unknown)");
-    if (eventId) {
-      await supabase
-        .from("nicky_webhook_events")
-        .update({
-          processing_status: "rejected",
-          processed: false,
-          processing_error: "rejected: unauthorized source IP",
-          processed_at: new Date().toISOString(),
-        })
-        .eq("id", eventId);
-    }
-    return errorResponse("Forbidden: source IP not allowed.", 403);
-  }
+  // (Source IP was already validated above, before the body was read/stored, so
+  //  every event that reaches here is from the allowed IP. The dedupe/reprocess
+  //  logic still refreshes audit fields for authorized redeliveries.)
 
   const itemId = typeof payload.itemId === "string" ? payload.itemId : undefined;
   if (!itemId) {
