@@ -5,7 +5,7 @@
 
 export * from "./types";
 export { mapRemoteStatus, isTerminal, TERMINAL_STATUSES } from "./status";
-export { callFunction, NickyFunctionError } from "./client";
+export { callFunction, NickyFunctionError, normalizeFunctionsBaseUrl } from "./client";
 
 export { useNickyAssets } from "./useNickyAssets";
 export type { UseNickyAssetsResult } from "./useNickyAssets";

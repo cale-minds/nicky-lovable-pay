@@ -29,12 +29,18 @@ function stripTrailingSlash(url: string): string {
  *
  * `requireApiKey` defaults to true. Functions that legitimately do not need the
  * secret key (none currently) can opt out.
+ *
+ * ⚠️ LLM CRITICAL: The apiKey read here MUST NEVER be returned to the client,
+ * logged, or included in error messages sent to the browser. Treat it with the
+ * same care as a database password. See docs/IMPLEMENTATION_SECURITY_GUIDELINES.md
+ * section 1 and docs/security.md section 1.
  */
 export function getNickyEnv(requireApiKey = true): NickyEnv {
   const apiKey = Deno.env.get("NICKY_API_KEY") ?? "";
   if (requireApiKey && !apiKey) {
     // Fail loudly with a clear, actionable message rather than sending an
-    // unauthenticated request to Nicky.
+    // unauthenticated request to Nicky. Note: we do not include the env var
+    // value in any error that might reach the client.
     throw new Error(
       "NICKY_API_KEY is not set. Store it as a Supabase secret: " +
         "`supabase secrets set NICKY_API_KEY=...`",
@@ -67,6 +73,10 @@ function parsePositiveInt(value: string | undefined, fallback: number): number {
  * Reads the shared secret that protects the scheduled reconciliation function.
  * Returns "" if unset; callers must treat an unset secret as "not configured"
  * and refuse to run rather than running unauthenticated.
+ *
+ * ⚠️ LLM NOTE: nicky-reconcile-open-orders MUST fail closed (refuse to run) if
+ * this secret is empty. Never weaken this check. It is the only auth for a
+ * function that can mark orders as paid.
  */
 export function getReconciliationSecret(): string {
   return Deno.env.get("NICKY_RECONCILIATION_SECRET") ?? "";

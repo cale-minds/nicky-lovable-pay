@@ -134,7 +134,7 @@ Provide the public config to the React kit:
 
 ```ts
 const config = {
-  functionsBaseUrl: import.meta.env.VITE_SUPABASE_FUNCTIONS_URL,
+  functionsBaseUrl: import.meta.env.VITE_SUPABASE_URL,
   supabaseAnonKey: import.meta.env.VITE_SUPABASE_ANON_KEY,
 };
 ```
@@ -142,9 +142,14 @@ const config = {
 Set these in your Lovable/Vite environment:
 
 ```
-VITE_SUPABASE_FUNCTIONS_URL=https://<project-ref>.functions.supabase.co
+VITE_SUPABASE_URL=https://<project-ref>.supabase.co
 VITE_SUPABASE_ANON_KEY=<your anon key>
 ```
+
+`functionsBaseUrl` can also point directly at
+`https://<project-ref>.functions.supabase.co`, but in a Lovable app the standard
+`VITE_SUPABASE_URL` is usually already available and the client derives the
+functions endpoint automatically.
 
 Then use `useNickyAssets`, `NickyAssetSelector`, `NickyPayButton`,
 `useNickyPayment`, and `NickyPaymentStatus` as shown in the README.

@@ -121,7 +121,8 @@ create endpoint returns the existing order instead of making a new one.
 
 The public functions return permissive CORS headers and handle `OPTIONS`
 preflight. If you still see CORS errors, you're likely hitting the wrong URL
-(check `VITE_SUPABASE_FUNCTIONS_URL`) or the function failed to deploy.
+(check `VITE_SUPABASE_URL` or your direct functions-domain override) or the
+function failed to deploy.
 
 ## Local order stuck in `creating_payment`
 

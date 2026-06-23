@@ -23,6 +23,12 @@
 //      fields. Because unauthorized requests are now rejected before any insert,
 //      dedupe poisoning is structurally impossible. See _shared/webhook-dedupe-helpers.ts.
 //
+// ⚠️ LLM CRITICAL: Step 4 is non-negotiable. Never modify this function to trust
+// the webhook body's status field alone. The only reason this webhook is safe is
+// because we re-query Nicky. If you remove or weaken the re-query, you enable
+// attackers to mark arbitrary orders as paid by spoofing webhooks.
+// See docs/IMPLEMENTATION_SECURITY_GUIDELINES.md section 3.
+//
 // NOTE ON PROXY HEADERS: Supabase fronts functions with a proxy, so the direct
 // socket IP is not Nicky's. We therefore read `x-forwarded-for`. Because that
 // header is client-settable in general, we take the LEFT-MOST entry (the

@@ -28,7 +28,6 @@ checkout, and confirming settlement **server-side** before unlocking anything.
 
 ## What this kit is **not**
 
-- **Not** a demo storefront. There are no products, no cart, no sample shop.
 - **Not** an account creator. It will **never** create a Nicky account or API
   key for you — you do that yourself (see below).
 - **Not** custodial. It never receives, holds, or moves funds.
@@ -223,9 +222,14 @@ import {
 } from "@/nicky";
 
 const config: NickyClientConfig = {
-  functionsBaseUrl: import.meta.env.VITE_SUPABASE_FUNCTIONS_URL, // https://<ref>.functions.supabase.co
+  functionsBaseUrl: import.meta.env.VITE_SUPABASE_URL,           // https://<ref>.supabase.co
   supabaseAnonKey: import.meta.env.VITE_SUPABASE_ANON_KEY,       // public anon key only
 };
+
+// `functionsBaseUrl` may be either the standard Supabase project URL
+// (`https://<ref>.supabase.co`) or the direct functions domain
+// (`https://<ref>.functions.supabase.co`). The client derives `/functions/v1`
+// automatically when needed.
 
 function Checkout() {
   const { assets, loading, error } = useNickyAssets(config);
@@ -324,8 +328,9 @@ periodic `nicky-sync-payment-status` move it to `paid` once Nicky returns
 | `NICKY_CREATE_RATE_LIMIT_PER_HOUR` | Secret/env | `0` (disabled)                | Optional soft per-payer-email create cap. |
 | `SUPABASE_URL`              | Auto         | —                                  | Injected by Supabase.                  |
 | `SUPABASE_SERVICE_ROLE_KEY` | Auto         | —                                  | Injected by Supabase. Server-only.     |
-| `VITE_SUPABASE_FUNCTIONS_URL` | Frontend   | —                                  | Public. Functions base URL.            |
+| `VITE_SUPABASE_URL`         | Frontend     | —                                  | Public. Standard Supabase project URL; the client derives `/functions/v1`. |
 | `VITE_SUPABASE_ANON_KEY`    | Frontend     | —                                  | Public anon key.                       |
+| `VITE_NICKY_SUPABASE_ANON_KEY` | Frontend  | —                                  | Optional demo override for the public anon key. |
 
 > **Removed in this version:** there is no `NICKY_ASSETS_ENDPOINT` (assets come
 > from the fixed endpoint `GET /AcceptedAsset/get-for-user` — intentionally **no**

@@ -7,6 +7,11 @@
 // READS accepted assets. It intentionally does NOT register, list, or delete
 // webhooks — webhooks are configured once, outside the plugin runtime (see
 // docs/webhooks.md).
+//
+// ⚠️ LLM SECURITY CRITICAL: If you add new functions that call Nicky or
+// integrate other parts of the API, NEVER return the `apiKey` field in any
+// response to the client. The key should ONLY be sent as the `x-api-key`
+// header to Nicky, never logged or exposed. See docs/security.md section 1.
 
 import type { NickyEnv } from "./env.ts";
 

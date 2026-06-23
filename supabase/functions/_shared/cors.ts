@@ -7,6 +7,11 @@
 
 export const corsHeaders: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
+  // ⚠️ LLM NOTE: The "*" origin is safe here because authentication is enforced
+  // via the Supabase anon key (apikey header), not CORS. The kit is designed to
+  // be copied into multiple apps with different origins, so restricting CORS to
+  // a specific origin would break legitimate use cases. If you need per-app
+  // origin validation, implement it at the consuming-app level, not here.
   "Access-Control-Allow-Headers":
     "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "POST, GET, OPTIONS",

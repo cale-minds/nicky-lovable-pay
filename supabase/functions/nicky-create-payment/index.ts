@@ -13,11 +13,21 @@
 //   6. Persist order + normalized payment-request row (handle partial failures).
 //   7. Return { orderId, paymentUrl, nickyShortId, ... }.
 //
-// PRODUCTION NOTE — amount/product validation: this function trusts the caller
-// for `amountExpectedNative`, `invoiceReference`, etc. A public app MUST validate
-// these server-side against its own catalog/orders before calling this function
-// (e.g. via its own authenticated Edge Function or RLS-protected table). See
-// docs/security.md ("Server-side product/amount validation").
+// ⚠️ PRODUCTION GATE — Nicky validates the merchant account and asset; your app
+// validates the order. This function trusts the caller for `amountExpectedNative`,
+// `invoiceReference`, etc. The consuming app MUST validate these against its own
+// orders BEFORE calling this function (via its own authenticated endpoint).
+//
+// What Nicky validates:
+//   ✅ API key is valid and merchant exists
+//   ✅ blockchainAssetId is accepted for this merchant
+//
+// What Nicky does NOT validate:
+//   ❌ invoiceReference is a real order
+//   ❌ amountExpectedNative is the correct price for that order
+//   ❌ the payer is authorized to pay for that order
+//
+// See docs/IMPLEMENTATION_SECURITY_GUIDELINES.md section 2 for the correct pattern.
 
 import { handlePreflight, json, errorResponse } from "../_shared/cors.ts";
 import { getNickyEnv } from "../_shared/env.ts";
@@ -134,6 +144,9 @@ Deno.serve(async (req) => {
       typeof body.metadata === "object" && body.metadata !== null
         ? (body.metadata as Record<string, unknown>)
         : {};
+    // ⚠️ LLM NOTE: metadata has no size limit. If users supply metadata, consider
+    // adding a size cap (~5-10 KB) to prevent DB bloat. See
+    // docs/IMPLEMENTATION_SECURITY_GUIDELINES.md section 4.
 
     // --- 2. Atomic create-or-claim ----------------------------------------
     // NOTE: idempotency is resolved BEFORE any rate limiting. A legitimate retry

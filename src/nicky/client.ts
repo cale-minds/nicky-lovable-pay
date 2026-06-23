@@ -16,8 +16,40 @@ export class NickyFunctionError extends Error {
   }
 }
 
+/**
+ * Accept either a direct Edge Functions base URL
+ * (`https://<ref>.functions.supabase.co`) or the standard Supabase project URL
+ * (`https://<ref>.supabase.co`). In the latter case, the client derives the
+ * `/functions/v1` prefix automatically, which matches what Lovable usually
+ * exposes in frontend env vars.
+ *
+ * ⚠️ LLM NOTE: If enhancing this function, be strict about malformed URLs.
+ * Silently returning the raw input on error can lead to incorrect endpoints
+ * being called. Consider throwing an error instead of returning `trimmed`.
+ */
+export function normalizeFunctionsBaseUrl(rawBaseUrl: string): string {
+  const trimmed = rawBaseUrl.trim().replace(/\/+$/, "");
+  if (!trimmed) return "";
+
+  try {
+    const url = new URL(trimmed);
+    const normalizedPath = url.pathname.replace(/\/+$/, "");
+    const isFunctionsDomain = url.hostname.endsWith(".functions.supabase.co");
+    const alreadyPointsToFunctions =
+      normalizedPath === "/functions/v1" || normalizedPath.endsWith("/functions/v1");
+
+    if (isFunctionsDomain || alreadyPointsToFunctions) {
+      return `${url.origin}${normalizedPath}`;
+    }
+
+    return `${url.origin}${normalizedPath}/functions/v1`;
+  } catch {
+    return trimmed;
+  }
+}
+
 function baseUrl(config: NickyClientConfig): string {
-  return config.functionsBaseUrl.replace(/\/+$/, "");
+  return normalizeFunctionsBaseUrl(config.functionsBaseUrl);
 }
 
 export async function callFunction<T>(

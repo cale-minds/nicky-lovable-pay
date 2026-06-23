@@ -138,7 +138,10 @@ export interface SyncPaymentStatusInput {
  */
 export interface NickyClientConfig {
   /** Base URL of your deployed Supabase Edge Functions, e.g.
-   *  `https://<project-ref>.functions.supabase.co`. */
+   *  `https://<project-ref>.functions.supabase.co`.
+   *  The client also accepts the standard Supabase project URL
+   *  (`https://<project-ref>.supabase.co`) and derives `/functions/v1`
+   *  automatically. */
   functionsBaseUrl: string;
   /** Supabase anon key, sent as the Authorization bearer + apikey header. */
   supabaseAnonKey: string;
