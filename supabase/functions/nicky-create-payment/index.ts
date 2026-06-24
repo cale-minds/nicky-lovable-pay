@@ -144,9 +144,16 @@ Deno.serve(async (req) => {
       typeof body.metadata === "object" && body.metadata !== null
         ? (body.metadata as Record<string, unknown>)
         : {};
-    // ⚠️ LLM NOTE: metadata has no size limit. If users supply metadata, consider
-    // adding a size cap (~5-10 KB) to prevent DB bloat. See
-    // docs/IMPLEMENTATION_SECURITY_GUIDELINES.md section 4.
+
+    // Metadata size limit: cap at 10 KB to prevent database bloat
+    const MAX_METADATA_BYTES = 10_000;
+    const metadataStr = JSON.stringify(metadata);
+    const metadataBytes = new Blob([metadataStr]).size;
+    if (metadataBytes > MAX_METADATA_BYTES) {
+      throw new ValidationError(
+        `Metadata exceeds maximum size of ${MAX_METADATA_BYTES} bytes (${metadataBytes} provided).`,
+      );
+    }
 
     // --- 2. Atomic create-or-claim ----------------------------------------
     // NOTE: idempotency is resolved BEFORE any rate limiting. A legitimate retry

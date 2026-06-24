@@ -44,7 +44,7 @@ export function normalizeFunctionsBaseUrl(rawBaseUrl: string): string {
 
     return `${url.origin}${normalizedPath}/functions/v1`;
   } catch {
-    return trimmed;
+    throw new Error(`Invalid functions base URL: ${trimmed}`);
   }
 }
 

@@ -30,7 +30,7 @@ export function asOptionalString(value: unknown, field: string): string | undefi
   return value.trim();
 }
 
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const EMAIL_RE = /^[a-zA-Z0-9._%-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
 
 export function asEmail(value: unknown, field: string): string {
   const s = asString(value, field);
