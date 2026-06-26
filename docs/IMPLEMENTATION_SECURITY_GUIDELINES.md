@@ -55,8 +55,9 @@ Any client with the URL of your Edge Function can call `nicky-create-payment` (v
 
 1. **Frontend:** User initiates a payment
    ```typescript
-   // ❌ NEVER pass user input directly
-   // ❌ NEVER call nicky-create-payment from React
+   // ❌ NEVER pass user-controlled amount/invoice details directly
+   // ❌ In public production flows, do not call nicky-create-payment from React
+   //    until your backend has validated the order and trusted amount.
    
    // ✅ Call YOUR backend endpoint with minimal data
    const response = await fetch('/api/checkout', {
@@ -98,7 +99,10 @@ Any client with the URL of your Edge Function can call `nicky-create-payment` (v
    window.location.href = paymentUrl;
    ```
 
-**LLM Specific:** If you see a feature request like "let users pay with crypto," always ask:
+**LLM Specific:** If you see a feature request like "let users pay with crypto,"
+first identify the app's trusted order/amount source. The React kit can render
+checkout UI, but production payment creation must be backed by server-side
+validation in the consuming app. Ask:
 1. "Where are the orders stored? Can you show me the database schema?"
 2. "How do you check that the user owns the order they're paying for?"
 3. "Where is the amount coming from — the user or your database?"
@@ -137,34 +141,39 @@ if (remoteStatus.status === "Finished") {
 
 ---
 
-### 4. **Metadata Object Must Have Size Limits**
+### 4. **Metadata Object Must Keep Its Size Limit**
 
 **The Rule:**
-The `metadata` field in `nicky-create-payment` accepts a client-supplied object. This can be abused to write extremely large rows.
+The `metadata` field in `nicky-create-payment` accepts a client-supplied object.
+This can be abused to write extremely large rows, so the function currently caps
+serialized metadata at 10 KB.
 
-**Mitigation (NOT currently implemented):**
-- Cap metadata size at ~5-10 KB
-- Validate that metadata keys/values are strings, numbers, booleans, or null (no nested objects)
-- Log warnings if metadata approaches the limit
+**Current Mitigation:**
+- Serialized metadata is capped at 10 KB.
+- Oversized metadata returns a validation error before any Nicky Payment Request
+  is created.
+- Keep this guard in place if you refactor validation.
 
 **Current Behavior:**
 ```typescript
-// In nicky-create-payment/index.ts, lines 133-136:
 const metadata =
   typeof body.metadata === "object" && body.metadata !== null
     ? (body.metadata as Record<string, unknown>)
     : {};
-// ⚠️ No size check — a malicious client can pass 1 MB of data
-```
 
-**LLM Specific:** If enhancing `nicky-create-payment`, add a metadata size check:
-```typescript
-const maxMetadataBytes = 10_000; // 10 KB
+const MAX_METADATA_BYTES = 10_000;
 const metadataStr = JSON.stringify(metadata);
-if (new Blob([metadataStr]).size > maxMetadataBytes) {
-  throw new ValidationError("Metadata exceeds size limit.");
+const metadataBytes = new Blob([metadataStr]).size;
+if (metadataBytes > MAX_METADATA_BYTES) {
+  throw new ValidationError(
+    `Metadata exceeds maximum size of ${MAX_METADATA_BYTES} bytes (${metadataBytes} provided).`,
+  );
 }
 ```
+
+**LLM Specific:** Do not remove this check. If you enhance metadata validation,
+make it stricter without increasing the accepted size unless the user explicitly
+asks for a different limit.
 
 ---
 
@@ -195,22 +204,16 @@ if (new Blob([metadataStr]).size > maxMetadataBytes) {
 
 ## 🟡 Medium-Priority Improvements (Nice to Have)
 
-### 6. **Email Validation is Simplistic**
+### 6. **Email Validation Should Stay Conservative**
 
 **Current:**
 ```typescript
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-```
-
-**Issues:**
-- Accepts `a@b.c` (valid technically, but unusual)
-- Does not validate against SMTP/DNS
-- Does not reject obviously invalid formats like `@example.com` or `user@.com`
-
-**Improvement:**
-```typescript
 const EMAIL_RE = /^[a-zA-Z0-9._%-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
 ```
+
+**Notes:**
+- This is intentionally lightweight runtime validation, not SMTP/DNS validation.
+- Keep obvious invalid values out (`@example.com`, `user@`, spaces, no TLD).
 
 **LLM Specific:** If you enhance email validation, test against common invalid cases:
 - `@example.com` (no user)
@@ -248,7 +251,7 @@ export function asString(value: unknown, field: string, maxLength = 1000): strin
 
 ---
 
-### 8. **Frontend URL Normalization Can Accept Malformed URLs**
+### 8. **Frontend URL Normalization Fails Loudly**
 
 **Current:**
 ```typescript
@@ -258,18 +261,8 @@ export function normalizeFunctionsBaseUrl(rawBaseUrl: string): string {
     const url = new URL(trimmed);
     // ...
   } catch {
-    return trimmed; // ⚠️ Returns the raw string if URL() throws
+    throw new Error(`Invalid functions base URL: ${trimmed}`);
   }
-}
-```
-
-**Risk:**
-If the URL is malformed, the function returns the untrimmed input, which could be used in string concatenation and create incorrect endpoints.
-
-**Better:**
-```typescript
-catch {
-  throw new Error(`Invalid functions base URL: ${trimmed}`);
 }
 ```
 
@@ -282,8 +275,8 @@ catch {
 ### ✅ Idempotency is Race-Safe
 The `nicky_create_or_claim_order` RPC prevents duplicate Nicky payment requests even under concurrent load. Keep this logic as-is.
 
-### ✅ Webhook Events Stored Before Processing
-Events are inserted into `nicky_webhook_events` with a `processing_status` before any processing. This creates an audit trail even if processing fails.
+### ✅ Authorized Webhook Events Stored Before Processing
+Authorized events are inserted into `nicky_webhook_events` with a `processing_status` before any processing. This creates an audit trail even if processing fails. Unauthorized source IPs are rejected before the body is read or stored.
 
 ### ✅ Webhook IP Validation is Done Early
 IP validation happens BEFORE reading/parsing the body, preventing storage-amplification attacks.
@@ -324,7 +317,7 @@ Before the consuming app goes live, verify:
 | Trusting the redirect URL as proof of payment | Always re-query Nicky server-side first |
 | Calling Nicky API directly from React | Route through Edge Function (Nicky validates account + asset; your app validates order) |
 | Skipping IP validation on webhooks | Check `x-forwarded-for` before reading body |
-| Using metadata without size limits | Cap at ~5-10 KB and validate types |
+| Removing metadata size limits | Keep the 10 KB serialized metadata cap |
 | Marking `paid` on webhook body alone | Always re-query Nicky before trusting status |
 | Hardcoding a single currency | Load assets live from Nicky at runtime |
 | Creating webhooks via an Edge Function | Configure once manually in Nicky dashboard |

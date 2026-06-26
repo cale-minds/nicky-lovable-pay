@@ -74,11 +74,13 @@ re-query is the real gate. The IP check simply reduces noise and abuse.
 
 ## 5. Auditability
 
-Every security-relevant event is persisted:
+Every authorized webhook and server-side status lookup is persisted:
 
-- `nicky_webhook_events` — the **raw** webhook body and selected headers, the
-  source IP, whether the IP was allowed, and the processing outcome. Stored
-  **before** processing so even rejected events are retained.
+- `nicky_webhook_events` — the **raw** authorized webhook body and selected
+  headers, the source IP, whether the IP was allowed, and the processing outcome.
+  Stored **before** processing so failed authorized processing attempts are
+  retained. Requests from unauthorized source IPs are rejected before the body is
+  read or stored; they appear only in platform/function logs.
 - `nicky_payment_status_checks` — every server-side Nicky lookup, what triggered
   it, the remote status, and the resulting local status. This is your "why did
   this order change?" trail.

@@ -107,9 +107,9 @@ reprocessed. If a real event still looks skipped, check the prior row's
 - `PaymentValidationRequired` maps to `validation_required` and is **intended**
   to stay locked until Nicky finishes validation. Poll/sync again later.
 - Check `nicky_payment_status_checks` for what Nicky returned on each lookup.
-- Make sure webhooks are registered (`GET /api/public/WebHookApi/list`) **and**
-  your success page polls `nicky-sync-payment-status`. Don't rely on webhooks
-  alone.
+- Make sure the webhook was configured once in Nicky for both required events and
+  that your success page polls `nicky-sync-payment-status`. Don't rely on
+  webhooks alone.
 
 ## Duplicate orders
 

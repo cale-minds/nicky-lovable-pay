@@ -6,6 +6,11 @@ what **not** to do (no account creation, no demo store, no exposed keys).
 
 > Before running it: create your Nicky account and API key yourself (Lovable
 > cannot and should not do this), and have your Supabase project connected.
+> If installing from a public repository, tell Lovable to read the root
+> `AGENTS.md` first, then `README.md`, `docs/security.md`, and
+> `docs/production-checklist.md`.
+> Before the implementation prompt, paste `docs/lovable-project-knowledge.md`
+> into Lovable Project Knowledge so these payment rules persist across turns.
 
 ---
 
@@ -14,6 +19,10 @@ what **not** to do (no account creation, no demo store, no exposed keys).
 ```text
 Add the "Nicky Payment Kit" to this existing app to accept non-custodial crypto
 payments via Nicky. This is an integration, NOT a new product or demo store.
+
+If this kit is being referenced from a public repository, first read AGENTS.md,
+README.md, docs/security.md, and docs/production-checklist.md. Treat AGENTS.md
+as the hard implementation contract.
 
 STRICT RULES — follow all of these:
 - Do NOT create a Nicky account or a Nicky API key. The user creates those

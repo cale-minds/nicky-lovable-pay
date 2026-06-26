@@ -69,6 +69,7 @@ never proof.
 ```
 .
 ├── README.md
+├── AGENTS.md                 # hard rules for Lovable/LLM agents
 ├── .env.example
 ├── package.json
 ├── .github/workflows/ci.yml     # CI: typecheck + tests (+ Deno edge check)
@@ -80,6 +81,7 @@ never proof.
 │   ├── production-checklist.md  # pre-launch checklist
 │   ├── operations.md            # day-2 runbook
 │   ├── lovable-install-prompt.md# copy-paste prompt for Lovable
+│   ├── lovable-project-knowledge.md # Project Knowledge text for Lovable
 │   └── troubleshooting.md
 ├── supabase/
 │   ├── config.toml              # per-function verify_jwt settings
