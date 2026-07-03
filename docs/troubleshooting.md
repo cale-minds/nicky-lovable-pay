@@ -34,6 +34,49 @@ Nicky rejected the create call. Check:
 - The function logs (`supabase functions logs nicky-create-payment`) for the
   Nicky status code.
 
+## `nicky-create-payment` returns 502 and Nicky says `billDetails` / `requester` are missing
+
+The Edge Function likely sent the wrong JSON shape to
+`POST /api/public/PaymentRequestPublicApi/create`.
+
+The public Nicky create endpoint requires a **nested** payload:
+
+```json
+{
+  "blockchainAssetId": "BRL.BRL",
+  "amountExpectedNative": "25.00",
+  "billDetails": {
+    "invoiceReference": "order-1234",
+    "description": "Pro plan - 1 month"
+  },
+  "requester": {
+    "email": "buyer@example.com",
+    "name": "Ada Lovelace"
+  },
+  "sendNotification": true
+}
+```
+
+Common mistake:
+
+```json
+{
+  "blockchainAssetId": "BRL.BRL",
+  "amountExpectedNative": "25.00",
+  "invoiceReference": "order-1234",
+  "description": "Pro plan - 1 month",
+  "payerEmail": "buyer@example.com",
+  "payerName": "Ada Lovelace"
+}
+```
+
+That flat payload is invalid for the public Nicky create endpoint. The browser
+may send a simple internal payload to **your** Edge Function, but the Edge
+Function must transform it to the nested Nicky DTO before calling Nicky.
+
+Also do **not** send `acceptedAssetId` to the public create endpoint; use the
+selected accepted asset's `id` as `blockchainAssetId`.
+
 ## `nicky-create-payment` returns 502 with "missing required `id` / `bill.shortId`"
 
 The Nicky create response must contain `response.id` (Payment Request UUID) and

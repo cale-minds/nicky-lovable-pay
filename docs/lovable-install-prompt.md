@@ -59,6 +59,19 @@ WHAT TO INSTALL:
      the payment URL as https://pay.nicky.me/home?paymentId=<response.bill.shortId>.
      If response.id or response.bill.shortId is missing, mark the order failed,
      store the raw response, and return 502. Never return the API key.
+     IMPORTANT: the Nicky API create request body MUST be nested as:
+     {
+       blockchainAssetId,
+       amountExpectedNative,
+       billDetails: { invoiceReference, description },
+       requester: { email, name },
+       sendNotification,
+       successUrl?,
+       cancelUrl?
+     }
+     Do NOT send a flat payload with top-level description, invoiceReference,
+     payerName, or payerEmail. Do NOT send acceptedAssetId to the public create
+     endpoint; use the selected accepted asset id as blockchainAssetId.
    - nicky-list-assets: reads accepted assets from GET /AcceptedAsset/get-for-user,
      normalizes them (id, assetName, isFiat, decimalPrecisionUI, assetChain,
      assetTicker), and caches them. Return a clear error on empty/invalid

@@ -355,6 +355,54 @@ order is marked `failed`, the raw response is stored in `nicky_create_response`,
 no `nicky_payment_requests` row is created, no `paymentUrl` is returned, and the
 caller receives a clear `502`.
 
+### Payment request create payload
+
+The browser-facing payload and the Nicky-facing payload are **not** the same
+thing.
+
+- Your app may send a simple internal body to its own Edge Function, for example
+  a selected asset id and payer info.
+- The Edge Function must then build the **nested** Nicky DTO before calling
+  `POST /api/public/PaymentRequestPublicApi/create`.
+
+Required Nicky create shape:
+
+```json
+{
+  "blockchainAssetId": "BRL.BRL",
+  "amountExpectedNative": "25.00",
+  "billDetails": {
+    "invoiceReference": "order-1234",
+    "description": "Pro plan - 1 month"
+  },
+  "requester": {
+    "email": "buyer@example.com",
+    "name": "Ada Lovelace"
+  },
+  "sendNotification": true,
+  "successUrl": "https://example.com/payment/success?ref=order-1234",
+  "cancelUrl": "https://example.com/payment/cancel?ref=order-1234"
+}
+```
+
+Do **not** send a flat payload like:
+
+```json
+{
+  "blockchainAssetId": "BRL.BRL",
+  "amountExpectedNative": "25.00",
+  "invoiceReference": "order-1234",
+  "description": "Pro plan - 1 month",
+  "payerEmail": "buyer@example.com",
+  "payerName": "Ada Lovelace"
+}
+```
+
+That flat shape is not compatible with the public Nicky create endpoint because
+`billDetails` and `requester` are required nested objects. Also do **not** send
+`acceptedAssetId` to the create endpoint; use the accepted asset's `id` as
+`blockchainAssetId`.
+
 ---
 
 ## Security

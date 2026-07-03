@@ -37,6 +37,17 @@ adapting the kit.
 - Do not change the accepted-assets endpoint path. It is exactly
   `GET /AcceptedAsset/get-for-user` and intentionally has no `/api/public`
   prefix.
+- Treat the browser request body and the Nicky API request body as two different
+  contracts. A consuming app may send a simple internal payload such as
+  `{ selectedAssetId, name, email }` to its own Edge Function, but the Edge
+  Function MUST transform that into Nicky's public create DTO before calling
+  Nicky.
+- The public Nicky create endpoint requires a nested payload with
+  `blockchainAssetId`, `amountExpectedNative`, `billDetails`, and `requester`.
+  Do not send a flat payload containing `description`, `invoiceReference`,
+  `payerName`, or `payerEmail` at the top level.
+- Do not send `acceptedAssetId` to `POST /api/public/PaymentRequestPublicApi/create`.
+  Use the chosen accepted asset's `id` as `blockchainAssetId`.
 - Do not probe alternate create-payment response fields. Creation requires
   `response.id` and `response.bill.shortId`; missing values are API-contract
   failures.

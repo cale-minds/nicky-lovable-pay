@@ -66,6 +66,19 @@ Nicky API contract
 - Accepted assets load from GET /AcceptedAsset/get-for-user. This path intentionally has no /api/public prefix.
 - Do not introduce NICKY_ASSETS_ENDPOINT.
 - Payment creation calls POST /api/public/PaymentRequestPublicApi/create.
+- The browser payload and the Nicky API payload are different contracts. A simple internal request like { selectedAssetId, name, email } is acceptable only between the app and its own Edge Function.
+- Before calling Nicky, the Edge Function must transform that internal request into:
+  {
+    blockchainAssetId,
+    amountExpectedNative,
+    billDetails: { invoiceReference, description },
+    requester: { email, name },
+    sendNotification,
+    successUrl?,
+    cancelUrl?
+  }
+- Do not send a flat create payload with top-level description, invoiceReference, payerName, or payerEmail.
+- Do not send acceptedAssetId to the public create endpoint. Use the selected accepted asset id as blockchainAssetId.
 - The create response must include response.id and response.bill.shortId.
 - The payment URL is https://pay.nicky.me/home?paymentId=<response.bill.shortId>.
 - Do not probe alternate or legacy response fields. Missing identifiers are API-contract failures.
@@ -86,4 +99,3 @@ Before go-live
 - Run npm ci, npm run typecheck, npm test, and npm run typecheck:edge.
 - Test asset loading, payment creation, redirect to Nicky, success-page sync, cancel flow, webhook processing, and scheduled reconciliation.
 ```
-

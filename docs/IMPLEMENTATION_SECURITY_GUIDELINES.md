@@ -141,6 +141,80 @@ if (remoteStatus.status === "Finished") {
 
 ---
 
+### 3b. **Transform Internal Payloads Into Nicky's Public Create DTO**
+
+**The Rule:**
+Your app's internal create-payment request body does not need to match Nicky's
+public API shape. But the final server-side call to
+`POST /api/public/PaymentRequestPublicApi/create` MUST match Nicky's DTO exactly.
+
+**Nicky's required public create shape:**
+```typescript
+{
+  blockchainAssetId: string;
+  amountExpectedNative: string | number;
+  billDetails: {
+    invoiceReference: string;
+    description: string;
+  };
+  requester: {
+    email: string;
+    name: string;
+  };
+  sendNotification: boolean;
+  successUrl?: string;
+  cancelUrl?: string;
+}
+```
+
+**Common integration mistake:**
+```typescript
+// ❌ Wrong for the public Nicky API
+{
+  blockchainAssetId,
+  amountExpectedNative,
+  invoiceReference,
+  description,
+  payerEmail,
+  payerName,
+  acceptedAssetId,
+}
+```
+
+This flat payload looks plausible, but Nicky's backend will reject it because
+`billDetails` and `requester` are required nested properties.
+
+**Correct pattern:**
+```typescript
+// Browser -> your Edge Function
+{ selectedAssetId, name, email }
+
+// Your Edge Function -> Nicky public API
+{
+  blockchainAssetId: selectedAsset.id,
+  amountExpectedNative,
+  billDetails: {
+    invoiceReference,
+    description,
+  },
+  requester: {
+    email,
+    name,
+  },
+  sendNotification: true,
+  successUrl,
+  cancelUrl,
+}
+```
+
+**Important:**
+- `acceptedAssetId` is not part of the public Nicky create DTO.
+- Use the accepted asset's `id` as `blockchainAssetId`.
+- If you keep an internal `selectedAssetId` field, transform it before the
+  external API call instead of forwarding it blindly.
+
+---
+
 ### 4. **Metadata Object Must Keep Its Size Limit**
 
 **The Rule:**
