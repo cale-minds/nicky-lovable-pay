@@ -372,7 +372,7 @@ Before the consuming app goes live, verify:
 - [ ] Frontend code never imports or references `NICKY_API_KEY`
 - [ ] Consuming app has server-side authentication and order validation before calling `nicky-create-payment`
 - [ ] Consuming app re-queries Nicky before unlocking paid features (via `nicky-sync-payment-status`)
-- [ ] Webhook is configured in Nicky dashboard pointing to the correct URL (no local script creates it)
+- [ ] Webhook is configured once with the correct URL by setup automation or manual fallback
 - [ ] Scheduled reconciliation is running every few minutes (optional but recommended)
 - [ ] Rate limiting is configured (app auth + WAF; optionally the built-in soft cap)
 - [ ] Success and cancel redirect URLs are configured and tested
@@ -394,7 +394,7 @@ Before the consuming app goes live, verify:
 | Removing metadata size limits | Keep the 10 KB serialized metadata cap |
 | Marking `paid` on webhook body alone | Always re-query Nicky before trusting status |
 | Hardcoding a single currency | Load assets live from Nicky at runtime |
-| Creating webhooks via an Edge Function | Configure once manually in Nicky dashboard |
+| Creating webhooks via an Edge Function | Configure once during setup; deployed runtime only processes webhooks |
 | Trusting `paid_at` alone for entitlement | Gate on current `status === "paid"` |
 
 ---

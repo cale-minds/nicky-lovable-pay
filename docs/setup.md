@@ -4,26 +4,63 @@ This guide walks through installing the Nicky Payment Kit into an existing
 Lovable (React + TypeScript + Supabase) app. It assumes you already have a
 Supabase project and the Supabase CLI installed.
 
-> This kit will **never** create a Nicky account or API key for you. You do
-> steps 1 and 2 yourself, manually.
+> Account/API-key setup is separate from the application runtime. During
+> installation you can either provide an existing Nicky API key or use Nicky's
+> agent signup API through the Lovable setup prompt. The deployed app must not
+> include a Nicky account creator or API-key generator.
 
 ---
 
-## 1. Create a Nicky account (manual)
+## 1. Configure Or Create A Nicky Account
 
-1. Go to **https://nicky.me** and sign up.
-2. Complete the onboarding / verification steps Nicky requires.
-3. Confirm you can log into the Nicky dashboard.
+If you already have a Nicky account and API key, use that key and skip to the
+next section.
 
-## 2. Generate a Nicky API key (manual)
+If you do not have an account, the Lovable setup prompt may guide signup through
+Nicky's public agent signup endpoint:
 
-1. In the Nicky dashboard, open the API keys / developer section.
-2. Create a **public API key**. This is the value you'll send as the
-   `x-api-key` header.
-3. Copy it once and store it somewhere safe. Treat it like a password — anyone
-   with this key can create payment requests on your account.
+```http
+POST https://api-public.pay.nicky.me/api/agents/signup
+```
 
-## 3. Store the API key as a Supabase secret
+Request body:
+
+```json
+{
+  "email": "merchant@example.com",
+  "password": "strong-password",
+  "language": "en",
+  "publicName": "My Lovable App"
+}
+```
+
+The response includes `apiKey`. Treat that value like a password immediately:
+store it as a Supabase secret, never show it in browser UI, and never commit or
+log it.
+
+After signup:
+
+1. Confirm the email address sent by Nicky.
+2. Explicitly agree to Nicky's Privacy Policy and Terms of Service.
+3. Record the agreement by calling:
+
+```http
+POST https://api-public.pay.nicky.me/api/public/privacy-policy/agree
+X-API-KEY: <NICKY_API_KEY>
+```
+
+## 2. Provide A Nicky API Key
+
+Use either:
+
+- an existing public API key from the Nicky dashboard; or
+- the `apiKey` returned by the agent signup endpoint above.
+
+This is the value sent to Nicky as the `x-api-key` header from server-side code
+only. Treat it like a password: anyone with this key can create payment requests
+on your account.
+
+## 3. Store The API Key As A Supabase Secret
 
 **Do not** paste the key into frontend code, `.env` files that get bundled, or
 git. Store it as a Supabase Edge Function secret:
@@ -41,29 +78,29 @@ supabase secrets set NICKY_WEBHOOK_ALLOWED_IP=20.76.240.81
 ```
 
 Accepted assets are read from the fixed endpoint
-`GET /AcceptedAsset/get-for-user` — there is no configurable assets endpoint.
+`GET /AcceptedAsset/get-for-user`; there is no configurable assets endpoint.
 
 > **Do not change this path.** It is intentionally exactly
 > `/AcceptedAsset/get-for-user` and does **not** include the `/api/public` prefix
-> that the PaymentRequest endpoints use — that matches the current Nicky API
-> contract for accepted assets. Do **not** "fix" it to
-> `/api/public/AcceptedAsset/get-for-user`. Verify the exact path against the live
+> that the PaymentRequest endpoints use. Verify the exact path against the live
 > Nicky API during E2E before production.
 
-## 4. Copy the kit files into your project
+## 4. Copy The Kit Files Into Your Project
 
 From this repository, copy:
 
-- `supabase/migrations/001_nicky_payment_kit.sql` → your `supabase/migrations/`
-- `supabase/functions/_shared/` and the four `nicky-*` function folders
+- `supabase/migrations/001_nicky_payment_kit.sql` to your `supabase/migrations/`
+- `supabase/functions/_shared/` and the five `nicky-*` function folders
   (`nicky-create-payment`, `nicky-list-assets`, `nicky-webhook`,
-  `nicky-sync-payment-status`) → your `supabase/functions/`
-- `src/nicky/` → your app's `src/nicky/` (or wherever your alias `@/nicky`
+  `nicky-sync-payment-status`, `nicky-reconcile-open-orders`) to your
+  `supabase/functions/`
+- `src/nicky/` to your app's `src/nicky/` (or wherever your alias `@/nicky`
   points)
 - Merge the `[functions.*]` blocks from `supabase/config.toml` into your own
-  `supabase/config.toml` (especially `verify_jwt = false` for `nicky-webhook`).
+  `supabase/config.toml` (especially `verify_jwt = false` for `nicky-webhook`
+  and `nicky-reconcile-open-orders`).
 
-## 5. Run the SQL migration
+## 5. Run The SQL Migration
 
 ```bash
 supabase db push
@@ -78,13 +115,13 @@ editor and run it. This creates:
 - `nicky_payment_status_checks`
 - `nicky_assets_cache`
 
-All tables have **Row Level Security enabled with no policies** — only the
-service-role key (used by the Edge Functions) can access them. See
+All tables have **Row Level Security enabled with no policies**; only the
+service-role key used by the Edge Functions can access them. See
 `docs/security.md`.
 
-## 6. Deploy the Edge Functions
+## 6. Deploy The Edge Functions
 
-Four runtime functions plus the optional scheduled-reconciliation function:
+Four runtime functions plus the scheduled-reconciliation function:
 
 ```bash
 supabase functions deploy nicky-create-payment
@@ -97,38 +134,41 @@ supabase functions deploy nicky-reconcile-open-orders
 Verify `nicky-webhook` and `nicky-reconcile-open-orders` deployed with
 `verify_jwt = false` (Nicky and your scheduler carry no Supabase JWT). The
 reconciliation function is protected by the `NICKY_RECONCILIATION_SECRET` header
-instead (set it as a secret):
+instead:
 
 ```bash
 supabase secrets set NICKY_RECONCILIATION_SECRET=$(openssl rand -hex 32)
 ```
 
 > The plugin does **not** register, update, or delete webhooks at runtime, so
-> there is no `nicky-register-webhooks` function and no `WEBHOOK_CALLBACK_URL`
-> secret.
+> there is no `nicky-register-webhooks` Edge Function and no
+> `WEBHOOK_CALLBACK_URL` secret.
 
-## 7. Configure the webhook once (manual — no script)
+## 7. Configure The Webhook Once
 
 The callback URL is only known **after** deployment and is fixed:
 
-```
+```text
 https://<project-ref>.functions.supabase.co/nicky-webhook
 ```
 
-Configure the webhook **once** in Nicky (via the Lovable setup prompt or manually
-in the Nicky dashboard), pointing both required events at that URL:
+Configure the webhook **once** in Nicky, via the Lovable setup prompt, a
+setup-time Nicky Public API/private MCP call, or manual dashboard fallback. Point
+both required events at that URL:
 
 - `PaymentRequest_ReportAdded`
 - `PaymentRequest_StatusChanged`
 
-There is **no** repository script and **no** runtime function that registers
-webhooks. Do not use any callback URL other than the fixed one above. See
-[`webhook-registration.md`](webhook-registration.md) for the manual setup details
-and [`lovable-install-prompt.md`](lovable-install-prompt.md) for the guided flow.
-The plugin itself never registers/lists/updates/deletes webhooks — it only
-processes them.
+Webhook setup must be idempotent: list existing Nicky webhooks first and create
+only the missing event+URL pairs. There is **no** repository runtime script and
+**no** Edge Function that registers webhooks. Do not use any callback URL other
+than the fixed one above. See
+[`webhook-registration.md`](webhook-registration.md) for setup details and
+[`lovable-install-prompt.md`](lovable-install-prompt.md) for the guided flow.
+The deployed plugin itself never registers/lists/updates/deletes webhooks; it
+only processes them.
 
-## 8. Wire up the frontend
+## 8. Wire Up The Frontend
 
 Provide the public config to the React kit:
 
@@ -141,7 +181,7 @@ const config = {
 
 Set these in your Lovable/Vite environment:
 
-```
+```text
 VITE_SUPABASE_URL=https://<project-ref>.supabase.co
 VITE_SUPABASE_ANON_KEY=<your anon key>
 ```
@@ -154,15 +194,15 @@ functions endpoint automatically.
 Then use `useNickyAssets`, `NickyAssetSelector`, `NickyPayButton`,
 `useNickyPayment`, and `NickyPaymentStatus` as shown in the README.
 
-## 9. Schedule reconciliation (recommended)
+## 9. Schedule Reconciliation
 
 Schedule `nicky-reconcile-open-orders` to run every few minutes so missed/delayed
 webhooks and abandoned redirects are still reconciled. Call it with the
-`x-nicky-reconciliation-secret` header (via Supabase cron / `pg_cron` + `pg_net`,
-or an external scheduler). See [`operations.md`](operations.md) for the exact
+`x-nicky-reconciliation-secret` header via Supabase cron / `pg_cron` + `pg_net`,
+or an external scheduler. See [`operations.md`](operations.md) for exact
 invocation and scheduling patterns.
 
-## 10. Run CI checks before deploying
+## 10. Run CI Checks Before Deploying
 
 ```bash
 npm ci
@@ -175,13 +215,13 @@ CI runs the same on every push/PR (`.github/workflows/ci.yml`), and the Deno
 edge-check job is **blocking**. Then work through
 [`production-checklist.md`](production-checklist.md).
 
-### Installing Deno (for `typecheck:edge`)
+### Installing Deno For `typecheck:edge`
 
 The Edge Functions use `Deno.serve` and remote (`esm.sh`) imports, so they are
 type-checked with Deno, not `tsc`. Install the Deno CLI (v2.x):
 
 ```bash
-# macOS / Linux (official installer) — then add ~/.deno/bin to your PATH
+# macOS / Linux (official installer) - then add ~/.deno/bin to your PATH
 curl -fsSL https://deno.land/install.sh | sh
 
 # macOS (Homebrew)
@@ -194,23 +234,23 @@ irm https://deno.land/install.ps1 | iex
 
 Verify with `deno --version` (expect `deno 2.x`). The first
 `npm run typecheck:edge` needs network access to fetch and cache the remote
-imports. You do **not** need to install Deno for CI — the workflow installs it
-via `denoland/setup-deno@v2`.
+imports. You do **not** need to install Deno for CI; the workflow installs it via
+`denoland/setup-deno@v2`.
 
 > On a Windows/VirtualBox shared folder, run the checks from a local path (not
 > the shared mount) to avoid unreliable file I/O while Deno populates its cache.
 
-## 11. Test end-to-end
+## 11. Test End-To-End
 
-1. Load your checkout — the asset selector should populate from Nicky.
+1. Load your checkout; the asset selector should populate from Nicky.
 2. Create a payment and confirm you're redirected to `pay.nicky.me`.
 3. Complete (or cancel) a test payment.
 4. On return, your success page should poll `nicky-sync-payment-status` and only
-   show "paid" once Nicky reports `Finished`.
+   show `paid` once Nicky reports `Finished`.
 5. Check `nicky_webhook_events` and `nicky_payment_status_checks` in your DB for
    the audit trail.
 6. Run the reconciliation job once with `{"dryRun": true}` to confirm it is wired
-   and authenticated (see [`operations.md`](operations.md)).
+   and authenticated.
 
 See [`troubleshooting.md`](troubleshooting.md) if anything misbehaves,
 [`operations.md`](operations.md) for the day-2 runbook, and

@@ -115,8 +115,9 @@ as "pending"; only `paid` (i.e. Nicky `Finished`) unlocks anything.
   `verify_jwt = true` — they require the Supabase anon key.
 
 The plugin does **not** register, list, or delete webhooks at runtime, so there
-is no setup function to lock down. Webhooks are configured once, outside the
-plugin runtime (see `docs/webhooks.md`).
+is no deployed setup function to lock down. Webhooks are configured once during
+setup, outside the plugin runtime, by setup automation or manual fallback (see
+`docs/webhooks.md`).
 
 ## 9. Server-side product/amount validation (consuming-app responsibility)
 

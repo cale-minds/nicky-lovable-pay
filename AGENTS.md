@@ -9,8 +9,11 @@ adapting the kit.
 
 - Do not enable Lovable built-in Payments for this integration. Nicky is a
   custom payment provider here, not Stripe or Paddle.
-- Do not create a Nicky account, Nicky API key, or merchant onboarding flow. The
-  merchant does that manually in Nicky.
+- Do not add a Nicky account creator, Nicky API key generator, or merchant
+  onboarding UI to the consuming application runtime. During setup only, an
+  agent/Lovable installer may either ask for an existing Nicky API key or guide
+  the user through Nicky's agent signup flow (`POST /api/agents/signup`), email
+  confirmation, and Terms/Privacy agreement.
 - Never expose `NICKY_API_KEY` to the browser, Vite env vars, committed files,
   logs, responses, or generated UI. It belongs only in Supabase Edge Function
   secrets and is read server-side with `Deno.env`.
@@ -28,9 +31,14 @@ adapting the kit.
   `validation_required`.
 - Gate entitlement on current local `status === "paid"`, not on `paid_at`.
   `paid` is not terminal; only Nicky `Canceled` is terminal.
-- Do not register, list, update, or delete Nicky webhooks from this plugin. There
-  is no `nicky-register-webhooks` function and no webhook setup script.
-- Configure the Nicky webhook once, manually, after deployment, with callback
+- Do not register, list, update, or delete Nicky webhooks from browser code or
+  deployed application runtime code. There is no `nicky-register-webhooks` Edge
+  Function and no runtime webhook setup script.
+- During setup only, after Edge Functions are deployed and the callback URL is
+  known, the installer may list existing Nicky webhooks and create any missing
+  required webhooks. This setup action must be idempotent: do not create a
+  duplicate when the same event type already points at the fixed callback URL.
+- Configure the Nicky webhook once, by assisted setup or manual fallback, with callback
   `https://<project-ref>.functions.supabase.co/nicky-webhook` and events
   `PaymentRequest_ReportAdded` and `PaymentRequest_StatusChanged`.
 - Do not let users choose arbitrary webhook callback URLs.

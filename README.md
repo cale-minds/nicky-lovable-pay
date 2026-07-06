@@ -28,8 +28,8 @@ checkout, and confirming settlement **server-side** before unlocking anything.
 
 ## What this kit is **not**
 
-- **Not** an account creator. It will **never** create a Nicky account or API
-  key for you — you do that yourself (see below).
+- **Not** a runtime account creator. Setup may accept an existing key or guide
+  Nicky agent signup; the deployed app never creates a Nicky account or API key.
 - **Not** custodial. It never receives, holds, or moves funds.
 - **Not** a wallet, exchange, or fiat processor.
 - **Not** USD-only. Supported assets are read live from Nicky.
@@ -115,15 +115,23 @@ never proof.
 
 Full details in [`docs/setup.md`](docs/setup.md).
 
-### 1. Create your Nicky account (manual)
+### 1. Configure or create your Nicky account
 
-Go to **https://nicky.me**, sign up, and complete onboarding. **This kit does
-not create an account for you.**
+Use an existing Nicky account/API key, or let the Lovable setup prompt guide
+agent signup through Nicky's public endpoint:
 
-### 2. Generate your Nicky API key (manual)
+```http
+POST https://api-public.pay.nicky.me/api/agents/signup
+```
 
-In the Nicky dashboard, create a public API key. You'll send it as the
-`x-api-key` header. **Treat it like a password.**
+If setup creates the account, the user must confirm email and explicitly agree
+to Nicky's Privacy Policy / Terms before protected API calls continue.
+
+### 2. Provide your Nicky API key
+
+Use either an existing public API key from the Nicky dashboard or the `apiKey`
+returned by Nicky agent signup. You'll send it as the `x-api-key` header from
+server-side code only. **Treat it like a password.**
 
 ### 3. Store the API key as a Supabase secret
 
@@ -162,22 +170,26 @@ webhooks and abandoned redirects. It is **not** publicly callable: set
 `NICKY_RECONCILIATION_SECRET` and invoke it with the
 `x-nicky-reconciliation-secret` header (see [`docs/operations.md`](docs/operations.md)).
 
-### 6. Configure the webhook once (manual — no script)
+### 6. Configure the webhook once
 
-This plugin **only processes** webhooks at runtime — it does **not** create,
-list, update, or delete them, and it ships **no** local script that calls Nicky's
-webhook setup endpoints. Webhook configuration is a **one-time manual step**,
-done in Nicky (the Lovable setup prompt walks you through it).
+This plugin **only processes** webhooks at runtime. It does **not** create,
+list, update, or delete them from browser/deployed runtime code, and it ships
+**no** Edge Function that calls Nicky's webhook setup endpoints. Webhook
+configuration is a **one-time setup step**, done by the Lovable setup prompt or
+manual fallback.
 
 **After** deploying the functions (the callback URL is only known then),
 configure the webhook in Nicky pointing both required events at the fixed
 callback URL:
 
+If setup automation is used, list existing webhooks first and create only
+missing event+URL pairs.
+
 - Callback URL (do **not** use any other): `https://<project-ref>.functions.supabase.co/nicky-webhook`
 - Events: `PaymentRequest_ReportAdded` and `PaymentRequest_StatusChanged`
 
-See [`docs/webhook-registration.md`](docs/webhook-registration.md) for the manual
-setup details and [`docs/lovable-install-prompt.md`](docs/lovable-install-prompt.md)
+See [`docs/webhook-registration.md`](docs/webhook-registration.md) for setup
+details and [`docs/lovable-install-prompt.md`](docs/lovable-install-prompt.md)
 for the guided flow.
 
 ### 7. Schedule reconciliation (recommended)

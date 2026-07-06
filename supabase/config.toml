@@ -15,7 +15,7 @@
 #     key (sent by the React kit) is required.
 #
 # NOTE: this plugin does NOT register/list/delete webhooks at runtime. Webhooks
-# are configured once, outside the plugin runtime (see docs/webhooks.md).
+# are configured once during setup, outside the plugin runtime (see docs/webhooks.md).
 
 project_id = "your-project-ref"
 

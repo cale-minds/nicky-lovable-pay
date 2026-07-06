@@ -1,11 +1,13 @@
 # Lovable Install Prompt
 
-Copy the prompt below into Lovable to add the Nicky payment kit to an **existing**
-Lovable app. It tells Lovable exactly what to install and — just as importantly —
-what **not** to do (no account creation, no demo store, no exposed keys).
+Copy the prompt below into Lovable to add the Nicky payment kit to an
+**existing** Lovable app. It tells Lovable exactly what to install and, just as
+importantly, what **not** to do: no runtime account creation, no demo store, and
+no exposed keys.
 
-> Before running it: create your Nicky account and API key yourself (Lovable
-> cannot and should not do this), and have your Supabase project connected.
+> Before running it: have your Supabase project connected. If you already have a
+> Nicky account and API key, keep the key available. If you do not, the setup
+> prompt below can guide signup through Nicky's public agent signup API.
 > If installing from a public repository, tell Lovable to read the root
 > `AGENTS.md` first, then `README.md`, `docs/security.md`, and
 > `docs/production-checklist.md`.
@@ -21,33 +23,66 @@ Add the "Nicky Payment Kit" to this existing app to accept non-custodial crypto
 payments via Nicky. This is an integration, NOT a new product or demo store.
 
 If this kit is being referenced from a public repository, first read AGENTS.md,
-README.md, docs/security.md, and docs/production-checklist.md. Treat AGENTS.md
-as the hard implementation contract.
+README.md, docs/security.md, docs/lovable-install-prompt.md, and
+docs/production-checklist.md. Treat AGENTS.md as the hard implementation
+contract.
 
-STRICT RULES — follow all of these:
-- Do NOT create a Nicky account or a Nicky API key. The user creates those
-  manually in the Nicky dashboard.
+STRICT RULES - follow all of these:
+- Do NOT add Nicky account creation, API-key generation, or merchant onboarding
+  UI to the application runtime. Account/API-key setup may happen ONLY during
+  this installation conversation.
+- Start by asking whether the user already has a Nicky account and API key.
+  If yes, ask for the API key and store it only as Supabase secret
+  NICKY_API_KEY. If no, guide signup using Nicky's agent signup endpoint:
+  POST https://api-public.pay.nicky.me/api/agents/signup.
 - Do NOT put the Nicky API key anywhere in frontend code or in committed files.
   It must live ONLY as a Supabase secret named NICKY_API_KEY and be used ONLY
-  inside Supabase Edge Functions.
+  inside Supabase Edge Functions or setup-time server/API calls.
 - Do NOT build a demo storefront, sample products, or a cart.
 - Do NOT hardcode a single currency (no USD-only logic). Available settlement
   assets must be loaded from Nicky at runtime via GET /AcceptedAsset/get-for-user.
 - The webhook callback route is fixed and owned by the kit. Do not let the user
   choose arbitrary callback URLs.
-- Do NOT register, list, update, or delete webhooks at runtime, and do NOT create
-  a nicky-register-webhooks function. Do NOT add any local script that calls
-  Nicky's webhook setup endpoints. The plugin only PROCESSES webhooks. Webhook
-  setup in Nicky is a one-time MANUAL step done outside the plugin (you will guide
-  the user through it).
+- Do NOT register, list, update, or delete webhooks from browser code or deployed
+  runtime code, and do NOT create a nicky-register-webhooks Edge Function. The
+  plugin runtime only PROCESSES webhooks. Webhook setup is a one-time setup
+  action done after deployment. During this installation conversation you may
+  list/create required Nicky webhooks, but the operation must be idempotent:
+  list existing webhooks first and create only missing event+URL pairs.
+
+NICKY ACCOUNT / API KEY SETUP:
+1. Ask: "Do you already have a Nicky account and API key?"
+2. If the user answers yes:
+   - Ask for the API key.
+   - Store it as Supabase secret NICKY_API_KEY.
+   - Validate it server-side by calling Nicky's accepted-assets endpoint or a
+     private account/profile endpoint. Do not print or log the key.
+3. If the user answers no:
+   - Ask for email, password, optional language, and optional publicName.
+   - Call POST https://api-public.pay.nicky.me/api/agents/signup with:
+     {
+       email,
+       password,
+       language?,
+       publicName?
+     }
+   - The response contains apiKey. Treat it like a password and never show it in
+     UI, frontend code, committed files, logs, or function responses.
+   - Tell the user to confirm the email address sent by Nicky.
+   - Ask the user to explicitly confirm they agree to Nicky's Privacy Policy and
+     Terms of Service. Only after they agree, call
+     POST https://api-public.pay.nicky.me/api/public/privacy-policy/agree with
+     the X-API-KEY header.
+   - Store the apiKey as Supabase secret NICKY_API_KEY.
+   - Validate the configured key server-side before continuing.
 
 WHAT TO INSTALL:
 1. Supabase migration: create tables nicky_orders, nicky_payment_requests,
    nicky_webhook_events, nicky_payment_status_checks, nicky_assets_cache, with
    RLS enabled and no permissive policies. Use the provided
    001_nicky_payment_kit.sql.
-2. Supabase Edge Functions (Deno) — create EXACTLY these (four runtime + one
-   scheduled), no webhook-registration function:
+2. Supabase Edge Functions (Deno) - create EXACTLY these (four runtime + one
+   scheduled), no webhook-registration function and no account-signup function:
    - nicky-create-payment: validates input, reads NICKY_API_KEY from env. Use the
      race-safe DB path (nicky_create_or_claim_order RPC) so concurrent calls with
      the same idempotency key do NOT create duplicate Nicky requests: return the
@@ -90,7 +125,8 @@ WHAT TO INSTALL:
      validation_required) that have a Nicky id. Protect it with the
      x-nicky-reconciliation-secret header (NICKY_RECONCILIATION_SECRET) and
      verify_jwt = false; fail closed if the secret is unset. Never mark paid
-     except via a server-side Finished lookup. Do NOT register/delete webhooks.
+     except via a server-side Finished lookup. Do NOT register/delete webhooks
+     from this runtime function.
 3. Frontend kit under src/nicky/: NickyPayButton, NickyAssetSelector,
    NickyPaymentStatus, useNickyPayment, useNickyAssets, types, and an index.
    The frontend loads assets via nicky-list-assets, lets the user pick the
@@ -116,7 +152,7 @@ NICKY_CREATE_RATE_LIMIT_PER_HOUR (optional, default 0 = disabled).
 There is NO WEBHOOK_CALLBACK_URL and NO NICKY_ASSETS_ENDPOINT variable.
 Frontend gets only the public Supabase functions URL and anon key.
 
-PRODUCTION RULES (hard gates — do not go live until satisfied):
+PRODUCTION RULES (hard gates - do not go live until satisfied):
 - nicky-create-payment creates a REAL Nicky Payment Request (not a quote/dry-run),
   returns the real payment URL, and writes local linkage. The consuming app MUST
   authenticate/authorize users and validate amount/product/invoiceReference/payer
@@ -127,7 +163,7 @@ PRODUCTION RULES (hard gates — do not go live until satisfied):
   flows prefer the high-entropy orderId (UUID). Treat lookups by nickyShortId /
   nickyPaymentRequestId as server/admin flows; short ids are guessable. Restrict
   to orderId for untrusted clients, or add rate limiting/auth.
-- Accepted assets load from GET /AcceptedAsset/get-for-user — intentionally NO
+- Accepted assets load from GET /AcceptedAsset/get-for-user - intentionally NO
   /api/public prefix. Do NOT change this path.
 - Add rate limiting / abuse control (app auth + WAF/Cloudflare; optionally the
   built-in soft cap). Additionally allowlist the nicky-webhook endpoint to Nicky's
@@ -136,26 +172,44 @@ PRODUCTION RULES (hard gates — do not go live until satisfied):
   waiting_payment if Nicky reports PaymentPending. Gate entitlement on the current
   local status === "paid", not on paid_at.
 
-WEBHOOK SETUP RULES (no script, no runtime function):
+WEBHOOK SETUP RULES (setup-only, no runtime function):
 - Do NOT create a nicky-register-webhooks Edge Function.
 - Do NOT deploy webhook-registration code as an Edge Function.
-- Do NOT add any local script that calls Nicky's webhook setup endpoints.
-- Do NOT create, list, update, or delete webhooks from the plugin.
+- Do NOT add any runtime/local script to the app that calls Nicky's webhook setup
+  endpoints.
+- Do NOT create, list, update, or delete webhooks from browser code or deployed
+  application runtime.
 - Do NOT let users choose arbitrary callback URLs anywhere.
-- Webhook setup is a ONE-TIME MANUAL step the user performs in Nicky, pointing the
-  fixed callback URL at both required events. Guide the user through it after the
-  Edge Functions are deployed.
+- Webhook setup is a ONE-TIME SETUP step after the Edge Functions are deployed.
+  You may perform it through Nicky's Public API/private MCP or guide a manual
+  fallback. Use the fixed callback URL only:
+  https://<project-ref>.functions.supabase.co/nicky-webhook
+- Before creating webhooks, list existing webhooks. For each required event,
+  create the webhook only if no existing webhook has the same webHookType and
+  callback URL.
+- Required events:
+  - PaymentRequest_ReportAdded
+  - PaymentRequest_StatusChanged
+- REST shape for creation:
+  POST https://api-public.pay.nicky.me/api/public/WebHookApi/create
+  X-API-KEY: <NICKY_API_KEY>
+  {
+    "webHookType": "PaymentRequest_ReportAdded",
+    "url": "https://<project-ref>.functions.supabase.co/nicky-webhook"
+  }
+  Repeat for PaymentRequest_StatusChanged if missing.
 
 AFTER INSTALLING, tell me (the user) to:
-1) set the NICKY_API_KEY secret (and NICKY_RECONCILIATION_SECRET),
+1) confirm whether NICKY_API_KEY was stored from an existing key or from agent
+   signup, and set NICKY_RECONCILIATION_SECRET,
 2) run the migration (includes the nicky_create_or_claim_order RPC),
 3) deploy the Edge Functions (four runtime + nicky-reconcile-open-orders),
 4) derive (or ask me for) the deployed webhook URL:
    https://<project-ref>.functions.supabase.co/nicky-webhook,
-5) configure the webhook ONCE in Nicky (manually in the Nicky dashboard — there
-   is NO script for this), pointing that exact URL at both events
-   PaymentRequest_ReportAdded and PaymentRequest_StatusChanged; do not use any
-   other callback URL,
+5) confirm the webhook was configured ONCE in Nicky by setup automation or manual
+   fallback, pointing that exact URL at both events PaymentRequest_ReportAdded
+   and PaymentRequest_StatusChanged; do not use any other callback URL and do
+   not create duplicates,
 6) trigger a test payment and confirm a row in nicky_webhook_events reaches
    processing_status = 'processed',
 7) schedule nicky-reconcile-open-orders (with the x-nicky-reconciliation-secret
@@ -173,8 +227,9 @@ and the webhook as signals, never as proof of payment.
 ## After Lovable finishes
 
 Follow the post-install steps in [`setup.md`](setup.md), then work through
-[`production-checklist.md`](production-checklist.md). In short: set the secrets,
-run the migration, deploy the functions (incl. `nicky-reconcile-open-orders`),
-configure the webhook once **manually** in Nicky (no script — see
+[`production-checklist.md`](production-checklist.md). In short: configure or
+create the Nicky account during setup, set the secrets, run the migration,
+deploy the functions (incl. `nicky-reconcile-open-orders`), configure the
+webhook once by setup automation or manual fallback (no runtime function - see
 [`webhook-registration.md`](webhook-registration.md)), schedule reconciliation
 (see [`operations.md`](operations.md)), and wire the checkout UI.

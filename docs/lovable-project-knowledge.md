@@ -11,6 +11,15 @@ Project payment strategy
 - The public Nicky kit repository is: <PASTE_PUBLIC_REPOSITORY_URL_HERE>.
 - Before changing payment code, read the repository root AGENTS.md first, then README.md, docs/security.md, docs/lovable-install-prompt.md, and docs/production-checklist.md.
 
+Setup-time account strategy
+- At installation time, ask whether the user already has a Nicky account and API key.
+- If the user already has an API key, store it only as Supabase secret NICKY_API_KEY and validate it server-side.
+- If the user does not have an account, setup may call POST https://api-public.pay.nicky.me/api/agents/signup with email, password, optional language, and optional publicName.
+- The signup response contains apiKey. Treat it as a secret immediately: never show it in browser UI, frontend code, committed files, logs, or responses.
+- After signup, instruct the user to confirm the Nicky email.
+- Ask the user for explicit Privacy Policy / Terms of Service agreement. Only after they agree, call POST https://api-public.pay.nicky.me/api/public/privacy-policy/agree with the X-API-KEY header.
+- Account creation and API-key setup are setup-only orchestration. Do not add account creation, API-key generation, or merchant onboarding UI to the deployed application runtime.
+
 Nicky integration summary
 - The frontend uses the React kit from src/nicky/: NickyAssetSelector, NickyPayButton, NickyPaymentStatus, useNickyAssets, and useNickyPayment.
 - The backend uses Supabase Edge Functions:
@@ -19,6 +28,7 @@ Nicky integration summary
   - nicky-sync-payment-status
   - nicky-webhook
   - nicky-reconcile-open-orders
+- Do not add nicky-register-webhooks, account-signup, or merchant-onboarding Edge Functions.
 - The database migration is supabase/migrations/001_nicky_payment_kit.sql.
 - The migration creates nicky_orders, nicky_payment_requests, nicky_webhook_events, nicky_payment_status_checks, nicky_assets_cache, and the nicky_create_or_claim_order RPC.
 - Keep RLS enabled on all Nicky tables. Do not add broad permissive policies.
@@ -27,7 +37,7 @@ Security rules
 - Never expose NICKY_API_KEY in frontend code, Vite env vars, committed files, logs, UI, network responses, or browser code.
 - NICKY_API_KEY must live only as a Supabase Edge Function secret and be read server-side with Deno.env.
 - Browser code must not call the Nicky API directly.
-- Do not create a Nicky account, Nicky API key, merchant onboarding flow, demo store, fake products, or hardcoded pricing.
+- Do not add a runtime Nicky account creator, API-key generator, merchant onboarding flow, demo store, fake products, or hardcoded pricing.
 - The consuming app owns products, orders, authorization, entitlement, and price validation.
 - Before creating a real Nicky Payment Request in production, authenticate the user and validate order ownership, order status, amount, product, invoice reference, and payer details server-side.
 - The client must not be trusted for amountExpectedNative, invoiceReference, description, payer identity, or fulfillment decisions.
@@ -53,13 +63,14 @@ Nicky status model
   Canceled -> canceled
 
 Webhook rules
-- The plugin only processes webhooks. It must not register, list, update, or delete webhooks.
+- The plugin runtime only processes webhooks. It must not register, list, update, or delete webhooks from browser code or deployed runtime code.
 - Do not create a nicky-register-webhooks Edge Function.
-- Do not add local scripts that call Nicky webhook setup endpoints.
+- Do not add local runtime scripts that call Nicky webhook setup endpoints.
 - Do not let users choose arbitrary callback URLs.
 - The fixed callback URL is https://<project-ref>.functions.supabase.co/nicky-webhook.
-- Configure the webhook once manually in Nicky after the Edge Functions are deployed.
+- Configure the webhook once after the Edge Functions are deployed, either through setup automation or manual fallback.
 - Required Nicky events: PaymentRequest_ReportAdded and PaymentRequest_StatusChanged.
+- Webhook setup must be idempotent: list existing webhooks first and create only missing event+URL pairs.
 - nicky-webhook must deploy with verify_jwt = false and validate source IP before reading/storing the body.
 
 Nicky API contract
@@ -91,10 +102,11 @@ Supabase function auth
 - nicky-reconcile-open-orders: verify_jwt = false, protected by x-nicky-reconciliation-secret, and must fail closed if NICKY_RECONCILIATION_SECRET is unset.
 
 Before go-live
-- Set Supabase secrets NICKY_API_KEY and NICKY_RECONCILIATION_SECRET.
+- Nicky account/API key has been provided or created during setup and NICKY_API_KEY is stored as a Supabase secret.
+- NICKY_RECONCILIATION_SECRET is set.
 - Apply the SQL migration.
 - Deploy the five Edge Functions.
-- Configure the Nicky webhook manually with both required events.
+- Configure the Nicky webhook once with both required events, using setup automation or manual fallback.
 - Schedule nicky-reconcile-open-orders with x-nicky-reconciliation-secret.
 - Run npm ci, npm run typecheck, npm test, and npm run typecheck:edge.
 - Test asset loading, payment creation, redirect to Nicky, success-page sync, cancel flow, webhook processing, and scheduled reconciliation.
