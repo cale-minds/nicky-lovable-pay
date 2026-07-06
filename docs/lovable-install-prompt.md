@@ -31,10 +31,17 @@ STRICT RULES - follow all of these:
 - Do NOT add Nicky account creation, API-key generation, or merchant onboarding
   UI to the application runtime. Account/API-key setup may happen ONLY during
   this installation conversation.
-- Start by asking whether the user already has a Nicky account and API key.
-  If yes, ask for the API key and store it only as Supabase secret
-  NICKY_API_KEY. If no, guide signup using Nicky's agent signup endpoint:
+- Start with an explicit binary question before opening any secret field:
+  "Do you already have a Nicky account and API key? Answer YES or NO."
+  Do not ask for `NICKY_API_KEY`, do not show a Supabase secret input, and do not
+  ask the user to paste anything into `NICKY_API_KEY` until the user answers YES.
+  If YES, ask for the actual API key and store it only as Supabase secret
+  NICKY_API_KEY. If NO, do not ask for an API key; guide signup using Nicky's
+  agent signup endpoint:
   POST https://api-public.pay.nicky.me/api/agents/signup.
+- Never treat the string "agents/signup", "/api/agents/signup", or the full
+  signup URL as a Nicky API key or Supabase secret value. These are endpoint
+  instructions for setup orchestration only.
 - Do NOT put the Nicky API key anywhere in frontend code or in committed files.
   It must live ONLY as a Supabase secret named NICKY_API_KEY and be used ONLY
   inside Supabase Edge Functions or setup-time server/API calls.
@@ -51,13 +58,15 @@ STRICT RULES - follow all of these:
   list existing webhooks first and create only missing event+URL pairs.
 
 NICKY ACCOUNT / API KEY SETUP:
-1. Ask: "Do you already have a Nicky account and API key?"
+1. Ask this exact first question and wait for the answer before requesting any
+   secret: "Do you already have a Nicky account and API key? Answer YES or NO."
 2. If the user answers yes:
    - Ask for the API key.
    - Store it as Supabase secret NICKY_API_KEY.
    - Validate it server-side by calling Nicky's accepted-assets endpoint or a
      private account/profile endpoint. Do not print or log the key.
 3. If the user answers no:
+   - Do NOT open or fill a NICKY_API_KEY secret field yet.
    - Ask for email, password, optional language, and optional publicName.
    - Call POST https://api-public.pay.nicky.me/api/agents/signup with:
      {
@@ -75,6 +84,10 @@ NICKY ACCOUNT / API KEY SETUP:
      the X-API-KEY header.
    - Store the apiKey as Supabase secret NICKY_API_KEY.
    - Validate the configured key server-side before continuing.
+4. If the user types "agents/signup", "/api/agents/signup", "signup", or any URL
+   into an API-key field, stop and correct course: explain that this is not an
+   API key, clear that value, ask the YES/NO account question again, and follow
+   the branch above.
 
 WHAT TO INSTALL:
 1. Supabase migration: create tables nicky_orders, nicky_payment_requests,

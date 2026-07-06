@@ -14,6 +14,12 @@ adapting the kit.
   agent/Lovable installer may either ask for an existing Nicky API key or guide
   the user through Nicky's agent signup flow (`POST /api/agents/signup`), email
   confirmation, and Terms/Privacy agreement.
+- During setup, do not ask for `NICKY_API_KEY` until after the user has answered
+  an explicit yes/no account question. Ask exactly: "Do you already have a Nicky
+  account and API key? Answer YES or NO." If YES, request the actual API key. If
+  NO, run the agent signup flow. Never present `agents/signup`, `/api/agents/signup`,
+  or any endpoint path as a selectable or fillable secret value; those strings
+  are instructions for the installer, not API keys.
 - Never expose `NICKY_API_KEY` to the browser, Vite env vars, committed files,
   logs, responses, or generated UI. It belongs only in Supabase Edge Function
   secrets and is read server-side with `Deno.env`.

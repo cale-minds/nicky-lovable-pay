@@ -5,19 +5,28 @@ Lovable (React + TypeScript + Supabase) app. It assumes you already have a
 Supabase project and the Supabase CLI installed.
 
 > Account/API-key setup is separate from the application runtime. During
-> installation you can either provide an existing Nicky API key or use Nicky's
-> agent signup API through the Lovable setup prompt. The deployed app must not
-> include a Nicky account creator or API-key generator.
+> installation, first ask the user: "Do you already have a Nicky account and API
+> key? Answer YES or NO." Only ask for `NICKY_API_KEY` if the answer is YES. If
+> the answer is NO, use Nicky's agent signup API through the Lovable setup
+> prompt. The deployed app must not include a Nicky account creator or API-key
+> generator.
 
 ---
 
 ## 1. Configure Or Create A Nicky Account
 
-If you already have a Nicky account and API key, use that key and skip to the
-next section.
+Start with this exact setup question:
 
-If you do not have an account, the Lovable setup prompt may guide signup through
-Nicky's public agent signup endpoint:
+```text
+Do you already have a Nicky account and API key? Answer YES or NO.
+```
+
+If the answer is YES, ask for the actual API key and skip to the next section.
+Do not accept `agents/signup`, `/api/agents/signup`, or a URL as an API key.
+
+If the answer is NO, do not open or fill a `NICKY_API_KEY` secret field yet. The
+Lovable setup prompt may guide signup through Nicky's public agent signup
+endpoint:
 
 ```http
 POST https://api-public.pay.nicky.me/api/agents/signup

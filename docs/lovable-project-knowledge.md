@@ -12,12 +12,15 @@ Project payment strategy
 - Before changing payment code, read the repository root AGENTS.md first, then README.md, docs/security.md, docs/lovable-install-prompt.md, and docs/production-checklist.md.
 
 Setup-time account strategy
-- At installation time, ask whether the user already has a Nicky account and API key.
-- If the user already has an API key, store it only as Supabase secret NICKY_API_KEY and validate it server-side.
+- At installation time, the first Nicky account question must be explicit and binary: "Do you already have a Nicky account and API key? Answer YES or NO."
+- Do not ask for NICKY_API_KEY, show a Supabase secret input, or ask the user to paste a secret until the user answers YES.
+- If the user answers YES, ask for the actual API key, store it only as Supabase secret NICKY_API_KEY, and validate it server-side.
+- If the user answers NO, do not ask for an API key. Follow the agent signup flow instead.
 - If the user does not have an account, setup may call POST https://api-public.pay.nicky.me/api/agents/signup with email, password, optional language, and optional publicName.
 - The signup response contains apiKey. Treat it as a secret immediately: never show it in browser UI, frontend code, committed files, logs, or responses.
 - After signup, instruct the user to confirm the Nicky email.
 - Ask the user for explicit Privacy Policy / Terms of Service agreement. Only after they agree, call POST https://api-public.pay.nicky.me/api/public/privacy-policy/agree with the X-API-KEY header.
+- Never treat "agents/signup", "/api/agents/signup", or the full signup URL as an API key or Supabase secret value. These strings are setup instructions only. If the user enters one of them into a secret field, clear it and restart with the YES/NO account question.
 - Account creation and API-key setup are setup-only orchestration. Do not add account creation, API-key generation, or merchant onboarding UI to the deployed application runtime.
 
 Nicky integration summary
