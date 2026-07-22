@@ -77,7 +77,8 @@ never proof.
 │   ├── setup.md                 # step-by-step setup
 │   ├── security.md              # the security model (read this)
 │   ├── webhooks.md              # webhook flow, IP validation, idempotency
-│   ├── webhook-registration.md  # one-time MANUAL webhook setup (no script)
+│   ├── webhook-registration.md  # one-time setup-time webhook registration
+│   ├── wallets.md               # merchant Wallet Connections / Payment Routes
 │   ├── production-checklist.md  # pre-launch checklist
 │   ├── operations.md            # day-2 runbook
 │   ├── lovable-install-prompt.md# copy-paste prompt for Lovable
@@ -115,91 +116,44 @@ never proof.
 
 Full details in [`docs/setup.md`](docs/setup.md).
 
-### 1. Configure or create your Nicky account
+The setup sequence is canonical; do not skip or reorder its gates:
 
-Use an existing Nicky account/API key, or let the Lovable setup prompt guide
-agent signup through Nicky's public endpoint:
+1. Ask exactly: "Do you already have a Nicky account and API key? Answer YES or
+   NO." Do not request a secret before the answer.
+2. If YES, collect the key through a secure setup secret input when available.
+   If NO, call `POST /api/agents/signup`, capture the returned `apiKey`, and store
+   it directly without asking the user to paste it.
+3. For a new account, ask the user to confirm the email and review/accept the
+   Privacy Policy and Terms in parallel. Wait for one explicit declaration that
+   both are complete, then call `POST /api/public/privacy-policy/agree`.
+4. Store the key only as the Supabase secret `NICKY_API_KEY` and validate it
+   server-side with `GET /AcceptedAsset/get-for-user`. A `2xx` response containing
+   a bare or supported-envelope asset array proves authentication even when the
+   extracted list is empty. An empty list means merchant assets,
+   Wallet Connections, or Payment Routes still require configuration; it does
+   not make the key invalid.
+5. Copy the kit, apply `supabase/migrations/001_nicky_payment_kit.sql`, set
+   `NICKY_RECONCILIATION_SECRET`, and deploy all five Edge Functions.
+6. After validation and deployment, list existing webhooks and create only
+   missing event+URL pairs for the fixed callback
+   `https://<project-ref>.functions.supabase.co/nicky-webhook` and events
+   `PaymentRequest_ReportAdded` and `PaymentRequest_StatusChanged`. Assisted
+   setup through Nicky's Public API is the default; manual dashboard setup is
+   the fallback. The deployed app never manages webhooks.
+7. Report only verified outcomes. Then tell the merchant that, if Wallet
+   Connections, accepted settlement assets, and Payment Routes are not already
+   configured in Nicky, they must complete them before accepting payments. See
+   [`docs/wallets.md`](docs/wallets.md).
+8. Schedule `nicky-reconcile-open-orders` every few minutes with the
+   `x-nicky-reconciliation-secret` header. See
+   [`docs/operations.md`](docs/operations.md).
 
-```http
-POST https://api-public.pay.nicky.me/api/agents/signup
-```
+See [`docs/setup.md`](docs/setup.md) for commands and exact failure handling,
+[`docs/webhook-registration.md`](docs/webhook-registration.md) for webhook setup,
+and [`docs/lovable-install-prompt.md`](docs/lovable-install-prompt.md) for the
+guided Lovable flow.
 
-If setup creates the account, the user must confirm email and explicitly agree
-to Nicky's Privacy Policy / Terms before protected API calls continue.
-
-### 2. Provide your Nicky API key
-
-Use either an existing public API key from the Nicky dashboard or the `apiKey`
-returned by Nicky agent signup. You'll send it as the `x-api-key` header from
-server-side code only. **Treat it like a password.**
-
-### 3. Store the API key as a Supabase secret
-
-**Never** put the key in frontend code or commit it. Store it as a secret:
-
-```bash
-supabase secrets set NICKY_API_KEY=your_key_here
-# optional overrides (defaults shown):
-supabase secrets set NICKY_API_BASE_URL=https://api-public.pay.nicky.me
-supabase secrets set NICKY_PAY_BASE_URL=https://pay.nicky.me
-supabase secrets set NICKY_WEBHOOK_ALLOWED_IP=20.76.240.81
-```
-
-### 4. Run the SQL migration
-
-```bash
-supabase db push
-# or apply supabase/migrations/001_nicky_payment_kit.sql via the SQL editor
-```
-
-### 5. Deploy the Edge Functions
-
-The plugin ships four runtime functions plus an optional scheduled-reconciliation
-function:
-
-```bash
-supabase functions deploy nicky-create-payment
-supabase functions deploy nicky-list-assets
-supabase functions deploy nicky-sync-payment-status
-supabase functions deploy nicky-webhook                  # verify_jwt = false
-supabase functions deploy nicky-reconcile-open-orders    # verify_jwt = false, secret-protected
-```
-
-`nicky-reconcile-open-orders` is an operational fallback for missed/delayed
-webhooks and abandoned redirects. It is **not** publicly callable: set
-`NICKY_RECONCILIATION_SECRET` and invoke it with the
-`x-nicky-reconciliation-secret` header (see [`docs/operations.md`](docs/operations.md)).
-
-### 6. Configure the webhook once
-
-This plugin **only processes** webhooks at runtime. It does **not** create,
-list, update, or delete them from browser/deployed runtime code, and it ships
-**no** Edge Function that calls Nicky's webhook setup endpoints. Webhook
-configuration is a **one-time setup step**, done by the Lovable setup prompt or
-manual fallback.
-
-**After** deploying the functions (the callback URL is only known then),
-configure the webhook in Nicky pointing both required events at the fixed
-callback URL:
-
-If setup automation is used, list existing webhooks first and create only
-missing event+URL pairs.
-
-- Callback URL (do **not** use any other): `https://<project-ref>.functions.supabase.co/nicky-webhook`
-- Events: `PaymentRequest_ReportAdded` and `PaymentRequest_StatusChanged`
-
-See [`docs/webhook-registration.md`](docs/webhook-registration.md) for setup
-details and [`docs/lovable-install-prompt.md`](docs/lovable-install-prompt.md)
-for the guided flow.
-
-### 7. Schedule reconciliation (recommended)
-
-Set `NICKY_RECONCILIATION_SECRET` and schedule `nicky-reconcile-open-orders` to
-run every few minutes (Supabase cron / `pg_cron` + `pg_net`, or any external
-scheduler) so missed webhooks and abandoned redirects are still reconciled. See
-[`docs/operations.md`](docs/operations.md).
-
-### Before deploying: run CI locally
+### Before launch: run CI locally
 
 ```bash
 npm ci

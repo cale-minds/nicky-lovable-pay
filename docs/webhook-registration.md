@@ -7,14 +7,31 @@ installation, not something the deployed application does at runtime.
 > - **Runtime plugin behavior:** the `nicky-webhook` Edge Function only
 >   **processes** incoming webhooks. It never registers, lists, updates, or
 >   deletes them.
-> - **Setup behavior:** after the Edge Functions are deployed and the callback
->   URL is known, the installer may configure the webhook once through Nicky's
->   Public API/private MCP, or the user may configure it manually in the Nicky
->   dashboard.
+> - **Setup behavior:** after the API key is validated, the Edge Functions are
+>   deployed, and the callback URL is known, the installer configures the
+>   webhook through Nicky's Public API/private MCP. Manual dashboard setup is
+>   the fallback when assisted registration cannot succeed.
 
 There is intentionally **no** `nicky-register-webhooks` Edge Function, **no**
 runtime webhook-registration code, and **no** app runtime script that calls
 Nicky's webhook setup endpoints.
+
+## Preconditions
+
+Do not start registration until:
+
+- `NICKY_API_KEY` is stored as a Supabase secret and a setup-time server call to
+  `GET /AcceptedAsset/get-for-user` has authenticated it;
+- for agent signup, the user has explicitly declared both email confirmation
+  and Terms/Privacy acceptance, and the agreement API call has succeeded;
+- all five Edge Functions are deployed and the project ref is known.
+
+A `2xx` response containing a bare asset array or supported array envelope from
+the accepted-assets endpoint authenticates the key even when the extracted
+array is empty. An empty array means merchant configuration still needs
+attention; it is not an invalid-key result and does not itself prevent webhook
+registration. A `401`/`403` or `2xx` shape with no recognized asset array must
+be resolved before registration.
 
 ---
 
@@ -37,11 +54,17 @@ Register the callback URL for exactly these two Nicky events:
 - `PaymentRequest_ReportAdded`
 - `PaymentRequest_StatusChanged`
 
-## Idempotent Setup
+## Idempotent Assisted Setup
 
-Before creating webhooks, list existing Nicky webhooks. For each required event,
-create the webhook only when no existing webhook has the same `webHookType` and
-the same fixed callback URL.
+List existing Nicky webhooks:
+
+```http
+GET https://api-public.pay.nicky.me/api/public/WebHookApi/list
+X-API-KEY: <NICKY_API_KEY>
+```
+
+For each required event, create the webhook only when no existing webhook has
+the same `webHookType` and fixed callback URL.
 
 REST creation shape:
 
@@ -60,8 +83,14 @@ Content-Type: application/json
 
 Repeat for `PaymentRequest_StatusChanged` if it is missing.
 
-Manual dashboard setup is still a valid fallback. The same idempotency idea
-applies: do not create duplicates for the same event and callback URL.
+Existing event+URL pairs count as success and must not be recreated. Report
+which pairs already existed and which were created. Do not report overall
+success unless both required pairs are confirmed by the list/create results.
+
+If an assisted call fails, retry only the webhook step. If it continues to fail,
+offer manual dashboard setup with the same fixed URL and events. Do not repeat
+signup, ask for the API key again, reset secrets, or recreate database objects.
+The same idempotency rule applies to the fallback.
 
 ## What The Plugin Processes
 

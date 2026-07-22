@@ -7,12 +7,25 @@ Assets are read from the fixed Nicky endpoint `GET /AcceptedAsset/get-for-user`
 
 - **`NICKY_API_KEY` missing or wrong.** The function fails loudly if the secret
   is not set. Run `supabase secrets list` and re-set it.
-- **Empty asset list.** If Nicky returns no accepted assets for the account, the
-  function returns a clear `502`. Confirm your Nicky account actually has
-  accepted assets configured.
+- **Empty asset list.** A `2xx` empty array means the API key authenticated, but
+  the function returns a clear `502` because checkout has no usable assets. Do
+  not label the key invalid. Confirm Merchant Configuration, Wallet Connections,
+  and Payment Routes in Nicky, then retry. See [`wallets.md`](wallets.md).
 - **Invalid response shape.** If the response cannot be parsed into the expected
   shape, the function returns a `502` with a clear message. Normalization lives
   in `_shared/assets.ts` (`normalizeAcceptedAssets`).
+
+## New agent account cannot pass protected setup calls
+
+After `POST /api/agents/signup`, email confirmation and review/acceptance of
+Nicky's Privacy Policy and Terms can happen in parallel. The installer must wait
+for one explicit user declaration confirming both, then call
+`POST /api/public/privacy-policy/agree` with the returned/stored key.
+
+If agreement or accepted-assets validation still returns `401`/`403`, retain the
+account and key, confirm that the email action has propagated, and retry the
+agreement/validation steps. Do not repeat signup and do not ask the user to paste
+the key returned by signup.
 
 ## `nicky-create-payment` returns 400
 

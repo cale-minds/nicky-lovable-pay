@@ -110,18 +110,21 @@ If your deployment sits behind a different/known proxy, set
 
 The plugin does **not** register webhooks at runtime, and there is **no**
 `nicky-register-webhooks` Edge Function. Configure the webhook **once**, after
-deploying the functions (the callback URL is only known then), using setup
-automation through the Lovable prompt/Nicky API/private MCP, or manual fallback
-in the Nicky dashboard:
+the API key is validated and the functions are deployed (the callback URL is
+only known then). Assisted setup through the Lovable prompt/Nicky Public
+API/private MCP is the default; manual Nicky dashboard configuration is the
+fallback:
 
 - Callback URL (use exactly this, never an arbitrary URL):
   `https://<project-ref>.functions.supabase.co/nicky-webhook`
 - Events: `PaymentRequest_ReportAdded` and `PaymentRequest_StatusChanged`
 
-If setup automation is used, it must list existing Nicky webhooks first and
-create only missing event+URL pairs. There is no `WEBHOOK_CALLBACK_URL` runtime
-secret. Webhook lifecycle management from the deployed app is intentionally out
-of scope. Full details: [`webhook-registration.md`](webhook-registration.md).
+Assisted setup must call `GET /api/public/WebHookApi/list` first and create only
+missing event+URL pairs with `POST /api/public/WebHookApi/create`. A webhook-step
+failure never restarts signup or secret/database setup. There is no
+`WEBHOOK_CALLBACK_URL` runtime secret. Webhook lifecycle management from the
+deployed app is intentionally out of scope. Full details:
+[`webhook-registration.md`](webhook-registration.md).
 
 ## Do not rely on webhooks alone
 

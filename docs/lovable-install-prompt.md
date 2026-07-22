@@ -10,7 +10,8 @@ no exposed keys.
 > prompt below can guide signup through Nicky's public agent signup API.
 > If installing from a public repository, tell Lovable to read the root
 > `AGENTS.md` first, then `README.md`, `docs/security.md`, and
-> `docs/production-checklist.md`.
+> `docs/production-checklist.md`, including `docs/wallets.md` for the merchant
+> configuration handoff.
 > Before the implementation prompt, paste `docs/lovable-project-knowledge.md`
 > into Lovable Project Knowledge so these payment rules persist across turns.
 
@@ -35,9 +36,10 @@ STRICT RULES - follow all of these:
   "Do you already have a Nicky account and API key? Answer YES or NO."
   Do not ask for `NICKY_API_KEY`, do not show a Supabase secret input, and do not
   ask the user to paste anything into `NICKY_API_KEY` until the user answers YES.
-  If YES, ask for the actual API key and store it only as Supabase secret
-  NICKY_API_KEY. If NO, do not ask for an API key; guide signup using Nicky's
-  agent signup endpoint:
+  If YES, ask for the actual API key through a secure setup secret input when
+  available, store it only as Supabase secret NICKY_API_KEY, and never echo it
+  in an assistant response. If NO, do not ask for an API key; guide signup using
+  Nicky's agent signup endpoint:
   POST https://api-public.pay.nicky.me/api/agents/signup.
 - Never treat the string "agents/signup", "/api/agents/signup", or the full
   signup URL as a Nicky API key or Supabase secret value. These are endpoint
@@ -45,6 +47,9 @@ STRICT RULES - follow all of these:
 - Do NOT put the Nicky API key anywhere in frontend code or in committed files.
   It must live ONLY as a Supabase secret named NICKY_API_KEY and be used ONLY
   inside Supabase Edge Functions or setup-time server/API calls.
+- When agent signup returns apiKey, capture and store it directly. Do NOT ask
+  the user to retrieve or paste it. After storage, never show the full key; only
+  confirm that the secret exists.
 - Do NOT build a demo storefront, sample products, or a cart.
 - Do NOT hardcode a single currency (no USD-only logic). Available settlement
   assets must be loaded from Nicky at runtime via GET /AcceptedAsset/get-for-user.
@@ -56,15 +61,20 @@ STRICT RULES - follow all of these:
   action done after deployment. During this installation conversation you may
   list/create required Nicky webhooks, but the operation must be idempotent:
   list existing webhooks first and create only missing event+URL pairs.
+- Do NOT simulate setup operations. Report signup, agreement, validation,
+  deployment, or webhook success only when the API/tool result or the user's
+  explicit declaration proves it.
+- After successful webhook setup, always give the conditional Wallet
+  Connections / Payment Routes reminder from docs/wallets.md. Never ask for
+  wallet private keys, seed phrases, exchange API secrets, or custody material.
 
 NICKY ACCOUNT / API KEY SETUP:
 1. Ask this exact first question and wait for the answer before requesting any
    secret: "Do you already have a Nicky account and API key? Answer YES or NO."
 2. If the user answers yes:
-   - Ask for the API key.
+   - Ask for the API key through a secure setup secret input when available.
    - Store it as Supabase secret NICKY_API_KEY.
-   - Validate it server-side by calling Nicky's accepted-assets endpoint or a
-     private account/profile endpoint. Do not print or log the key.
+   - Never print, log, echo, or repeat the key in an assistant response.
 3. If the user answers no:
    - Do NOT open or fill a NICKY_API_KEY secret field yet.
    - Ask for email, password, optional language, and optional publicName.
@@ -75,19 +85,38 @@ NICKY ACCOUNT / API KEY SETUP:
        language?,
        publicName?
      }
-   - The response contains apiKey. Treat it like a password and never show it in
-     UI, frontend code, committed files, logs, or function responses.
-   - Tell the user to confirm the email address sent by Nicky.
-   - Ask the user to explicitly confirm they agree to Nicky's Privacy Policy and
-     Terms of Service. Only after they agree, call
+   - The response contains apiKey. Capture it and store it directly as Supabase
+     secret NICKY_API_KEY. Treat it like a password and never show it in UI,
+     assistant responses, frontend code, committed files, logs, or function
+     responses. Do NOT ask the user to paste it.
+   - Tell the user that email confirmation and reviewing/accepting Nicky's
+     Privacy Policy (https://nicky.me/privacy-policy/) and Terms of Service
+     (https://nicky.me/terms-of-service/) can be completed in parallel.
+   - Wait for one explicit declaration confirming both, for example:
+     "I CONFIRM that I verified my Nicky email and I AGREE to Nicky's Privacy
+     Policy and Terms of Service."
+   - Only after that combined declaration, call
      POST https://api-public.pay.nicky.me/api/public/privacy-policy/agree with
      the X-API-KEY header.
-   - Store the apiKey as Supabase secret NICKY_API_KEY.
-   - Validate the configured key server-side before continuing.
+   - If that call reports incomplete email confirmation, keep the account and
+     key and retry only the agreement step after confirmation propagates. Never
+     repeat signup for this condition.
 4. If the user types "agents/signup", "/api/agents/signup", "signup", or any URL
    into an API-key field, stop and correct course: explain that this is not an
    API key, clear that value, ask the YES/NO account question again, and follow
    the branch above.
+5. Converge both branches and validate NICKY_API_KEY server-side with
+   GET https://api-public.pay.nicky.me/AcceptedAsset/get-for-user.
+   - 2xx containing a bare asset array or supported array envelope, including an
+     extracted empty array: authentication succeeded.
+   - 2xx with an empty array: do not call the key invalid. Continue installation
+     and webhook setup, but record that accepted assets, Merchant Configuration,
+     Wallet Connections, and/or Payment Routes require attention before go-live.
+   - 401/403: authentication/account activation failed. Stop before webhook
+     registration and report the status without exposing the key.
+   - 2xx with no recognized asset array in bare or supported-envelope form:
+     API-contract failure. Do not call the key invalid; stop and investigate
+     before registering the webhook.
 
 WHAT TO INSTALL:
 1. Supabase migration: create tables nicky_orders, nicky_payment_requests,
@@ -193,11 +222,13 @@ WEBHOOK SETUP RULES (setup-only, no runtime function):
 - Do NOT create, list, update, or delete webhooks from browser code or deployed
   application runtime.
 - Do NOT let users choose arbitrary callback URLs anywhere.
-- Webhook setup is a ONE-TIME SETUP step after the Edge Functions are deployed.
-  You may perform it through Nicky's Public API/private MCP or guide a manual
-  fallback. Use the fixed callback URL only:
+- Webhook setup is a ONE-TIME SETUP step after NICKY_API_KEY validation and Edge
+  Function deployment. Nicky's Public API/private MCP is the assisted default;
+  manual dashboard configuration is the fallback. Use the fixed callback URL:
   https://<project-ref>.functions.supabase.co/nicky-webhook
-- Before creating webhooks, list existing webhooks. For each required event,
+- Before creating webhooks, call
+  GET https://api-public.pay.nicky.me/api/public/WebHookApi/list with the
+  X-API-KEY header. For each required event,
   create the webhook only if no existing webhook has the same webHookType and
   callback URL.
 - Required events:
@@ -211,25 +242,35 @@ WEBHOOK SETUP RULES (setup-only, no runtime function):
     "url": "https://<project-ref>.functions.supabase.co/nicky-webhook"
   }
   Repeat for PaymentRequest_StatusChanged if missing.
+- Report webhook success only if the list/create results prove that both pairs
+  exist. If the API call fails, retry only the webhook step or offer the manual
+  fallback. Do not repeat signup, ask for the key again, reset secrets, or
+  recreate database objects.
 
-AFTER INSTALLING, tell me (the user) to:
-1) confirm whether NICKY_API_KEY was stored from an existing key or from agent
-   signup, and set NICKY_RECONCILIATION_SECRET,
-2) run the migration (includes the nicky_create_or_claim_order RPC),
-3) deploy the Edge Functions (four runtime + nicky-reconcile-open-orders),
-4) derive (or ask me for) the deployed webhook URL:
-   https://<project-ref>.functions.supabase.co/nicky-webhook,
-5) confirm the webhook was configured ONCE in Nicky by setup automation or manual
-   fallback, pointing that exact URL at both events PaymentRequest_ReportAdded
-   and PaymentRequest_StatusChanged; do not use any other callback URL and do
-   not create duplicates,
-6) trigger a test payment and confirm a row in nicky_webhook_events reaches
-   processing_status = 'processed',
-7) schedule nicky-reconcile-open-orders (with the x-nicky-reconciliation-secret
-   header) every few minutes,
-8) run npm ci && npm run typecheck && npm test && npm run typecheck:edge (CI)
-   before deploying,
-9) wire the frontend checkout UI using the provided components.
+WALLET REMINDER (mandatory after webhook success):
+- Always tell the user that, if accepted settlement assets, Wallet Connections,
+  and Payment Routes are not already configured in Nicky, they must sign in to
+  Nicky and complete that configuration before accepting payments. Link to
+  docs/wallets.md.
+- An empty accepted-assets array means the key authenticated but merchant setup
+  is incomplete. A non-empty array does not prove every desired route is ready.
+- Never ask for or handle wallet private keys, seed phrases, exchange API
+  secrets, or custody material. Never claim wallets are configured; the user
+  performs and confirms this in Nicky.
+
+AFTER INSTALLING, report to me (the user):
+1) whether NICKY_API_KEY came from an existing account or agent signup, without
+   displaying any part of the value,
+2) for agent signup, that you waited for my combined declaration of email
+   confirmation plus Terms/Privacy acceptance and successfully recorded it,
+3) whether validation authenticated the key and whether accepted assets were
+   empty or non-empty,
+4) that the migration and five Edge Function deployments completed,
+5) the exact fixed webhook callback and which required pairs were already
+   present or created; confirm no duplicates were created,
+6) the conditional Nicky Wallet Connections / Payment Routes reminder,
+7) the remaining reconciliation, CI, frontend, and E2E tasks, without claiming
+   any task you did not actually execute.
 
 Confirm payment ONLY via a server-side Nicky lookup. Treat the success redirect
 and the webhook as signals, never as proof of payment.
@@ -241,8 +282,10 @@ and the webhook as signals, never as proof of payment.
 
 Follow the post-install steps in [`setup.md`](setup.md), then work through
 [`production-checklist.md`](production-checklist.md). In short: configure or
-create the Nicky account during setup, set the secrets, run the migration,
-deploy the functions (incl. `nicky-reconcile-open-orders`), configure the
-webhook once by setup automation or manual fallback (no runtime function - see
-[`webhook-registration.md`](webhook-registration.md)), schedule reconciliation
-(see [`operations.md`](operations.md)), and wire the checkout UI.
+create the Nicky account during setup; for signup, finish the parallel
+email-confirmation and Terms/Privacy declaration gate; store and validate the
+key; run the migration; deploy the functions; configure the webhook once by
+assisted setup or manual fallback (no runtime function — see
+[`webhook-registration.md`](webhook-registration.md)); give the conditional
+wallet reminder from [`wallets.md`](wallets.md); schedule reconciliation (see
+[`operations.md`](operations.md)); and wire the checkout UI.

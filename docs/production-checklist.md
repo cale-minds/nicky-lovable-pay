@@ -5,12 +5,24 @@ Work through this before taking the Nicky payment kit live. It complements
 
 ## Accounts & Secrets
 
+- [ ] Setup started with the exact YES/NO question and did not request a secret
+      before the answer.
 - [ ] Nicky account/API key provided by the merchant or created during
       setup-time agent signup (`POST /api/agents/signup`).
-- [ ] If created during setup, email confirmation and Privacy Policy / Terms
-      agreement were completed before using the key for protected setup calls.
+- [ ] If created during setup, the returned `apiKey` was stored directly and the
+      user was not asked to paste it.
+- [ ] If created during setup, the user completed email confirmation and
+      reviewed/accepted the Privacy Policy / Terms in parallel, then explicitly
+      declared both complete before the agreement API call was made.
+- [ ] `POST /api/public/privacy-policy/agree` succeeded before other protected
+      setup calls continued.
 - [ ] `NICKY_API_KEY` stored as a **Supabase secret** (`supabase secrets set NICKY_API_KEY=...`).
 - [ ] API key is **never** present in frontend code, bundles, or git history.
+- [ ] Existing keys were collected through a secure setup secret input when
+      available and were never echoed in assistant responses.
+- [ ] `GET /AcceptedAsset/get-for-user` authenticated `NICKY_API_KEY` before
+      webhook setup. A `2xx` empty array was handled as incomplete merchant
+      configuration, not as an invalid key.
 - [ ] `NICKY_WEBHOOK_ALLOWED_IP` configured (default `20.76.240.81`).
 - [ ] `NICKY_RECONCILIATION_SECRET` set to a long random value (for the scheduled job).
 - [ ] (Optional) `NICKY_CREATE_RATE_LIMIT_PER_HOUR` set if you want the soft per-payer cap.
@@ -34,7 +46,9 @@ Work through this before taking the Nicky payment kit live. It complements
 
 ## Webhook (Configured Once, Setup-Only)
 
-- [ ] Webhook configured **once** in Nicky by setup automation or manual fallback.
+- [ ] Webhook configured **once** in Nicky after API-key validation and Edge
+      Function deployment. Nicky's Public API/private MCP was the assisted
+      default; manual dashboard setup was used only as a fallback.
       The plugin does **not** register webhooks at runtime and ships **no**
       deployed registration function.
 - [ ] Callback URL is exactly `https://<project-ref>.functions.supabase.co/nicky-webhook`
@@ -44,6 +58,20 @@ Work through this before taking the Nicky payment kit live. It complements
 - [ ] Configured for both events:
   - [ ] `PaymentRequest_ReportAdded`
   - [ ] `PaymentRequest_StatusChanged`
+- [ ] Any webhook failure was retried only at the webhook step; signup, keys,
+      secrets, migration, and deployed functions were preserved.
+
+## Merchant Configuration, Wallets, And Routes
+
+- [ ] The conditional wallet handoff from [`wallets.md`](wallets.md) was given
+      after webhook success.
+- [ ] The merchant confirmed that accepted settlement assets, Wallet
+      Connections, and Payment Routes exist in Nicky for every asset the app
+      will offer.
+- [ ] No wallet private key, seed phrase, exchange API secret, or other custody
+      material was requested or stored by Lovable or the consuming app.
+- [ ] The accepted-assets endpoint was checked again after merchant setup and
+      returned the expected non-empty asset set before E2E testing.
 
 ## Scheduled Reconciliation
 

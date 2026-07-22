@@ -15,6 +15,12 @@ client-controlled signal can cause a false "paid".**
 - The frontend only ever holds **public** values: your Supabase Functions URL
   and the Supabase **anon** key.
 
+During the setup conversation only, an existing key may be collected after the
+required YES/NO question through a secure secret input provided by the setup
+platform. The installer must store it immediately and never echo it in an
+assistant response. A key returned by agent signup is stored directly and is
+never requested from the user again. None of this creates a runtime secret form.
+
 > ⚠️ If you ever see the Nicky API key in a network response, a bundled JS file,
 > or a git commit — rotate it immediately in the Nicky dashboard.
 
@@ -115,9 +121,10 @@ as "pending"; only `paid` (i.e. Nicky `Finished`) unlocks anything.
   `verify_jwt = true` — they require the Supabase anon key.
 
 The plugin does **not** register, list, or delete webhooks at runtime, so there
-is no deployed setup function to lock down. Webhooks are configured once during
-setup, outside the plugin runtime, by setup automation or manual fallback (see
-`docs/webhooks.md`).
+is no deployed setup function to lock down. After API-key validation and Edge
+Function deployment, webhooks are configured once outside runtime. Assisted
+setup through Nicky's Public API/private MCP is the default and manual dashboard
+configuration is the fallback (see `docs/webhooks.md`).
 
 ## 9. Server-side product/amount validation (consuming-app responsibility)
 
